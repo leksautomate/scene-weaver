@@ -48,6 +48,10 @@ export default function ProjectForm() {
         style1,
         style2,
         {
+          voiceId,
+          splitMode,
+        },
+        {
           onPhase: (p) => setPhase(p),
           onSceneProgress: (num, type, status) => {
             setPhase(`Scene ${num}: ${type} ${status}`);
