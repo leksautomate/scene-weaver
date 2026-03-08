@@ -458,3 +458,146 @@ export async function bulkRegenerateFailed(
     onProgress(done, failedScenes.length);
   }
 }
+
+// Delete a project and all its assets
+export async function deleteProject(projectId: string): Promise<void> {
+  const folders = ["images", "audio", "style"];
+  for (const folder of folders) {
+    const { data: files } = await supabase.storage.from("project-assets").list(`${projectId}/${folder}`);
+    if (files && files.length > 0) {
+      const paths = files.map(f => `${projectId}/${folder}/${f.name}`);
+      await supabase.storage.from("project-assets").remove(paths);
+    }
+  }
+  await supabase.from("scenes").delete().eq("project_id", projectId);
+  const { error } = await supabase.from("projects").delete().eq("id", projectId);
+  if (error) throw new Error(`Failed to delete project: ${error.message}`);
+}
+
+// Stop a running project
+export async function stopProject(projectId: string): Promise<void> {
+  const { error } = await supabase.from("projects").update({ status: "stopped" }).eq("id", projectId);
+  if (error) throw new Error(`Failed to stop project: ${error.message}`);
+}
+
+// Resume a stopped/partial project
+export async function resumeProject(projectId: string, callbacks: PipelineCallbacks): Promise<void> {
+  const settings = loadProviderSettings();
+  await supabase.from("projects").update({ status: "processing" }).eq("id", projectId);
+
+  const { data: pendingScenes, error } = await supabase.from("scenes")
+    .select("*")
+    .eq("project_id", projectId)
+    .or("image_status.eq.pending,image_status.eq.failed,audio_status.eq.pending,audio_status.eq.failed")
+    .order("scene_number");
+  if (error) throw new Error(error.message);
+  if (!pendingScenes || pendingScenes.length === 0) {
+    await supabase.from("projects").update({ status: "completed" }).eq("id", projectId);
+    return;
+  }
+
+  callbacks.onPhase(`Resuming ${pendingScenes.length} scenes...`);
+  const styleUrls = [
+    getAssetUrl(projectId, "style", "style1.png"),
+    getAssetUrl(projectId, "style", "style2.png"),
+  ];
+
+  for (const scene of pendingScenes) {
+    const { data: projCheck } = await supabase.from("projects").select("status").eq("id", projectId).single();
+    if (projCheck?.status === "stopped") {
+      callbacks.onPhase("Project stopped by user.");
+      return;
+    }
+
+    const num = scene.scene_number;
+
+    if (scene.image_status !== "completed") {
+      callbacks.onSceneProgress(num, "image", "generating");
+      try {
+        let imageBlob: Blob;
+        if (settings.imageProvider === "whisk" && settings.whiskCookie) {
+          const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+          let success = false;
+          for (const prompt of allPrompts) {
+            try {
+              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls);
+              success = true;
+              break;
+            } catch (e: any) {
+              console.error(`Whisk prompt failed: ${e.message}`);
+              if (e.message.includes("expired") || e.message.includes("rate limited")) break;
+            }
+          }
+          if (!success) throw new Error("All Whisk prompts failed");
+        } else {
+          imageBlob = generateMockSVG(num, scene.image_prompt || "");
+        }
+        const buf = await imageBlob!.arrayBuffer();
+        await supabase.storage.from("project-assets").upload(
+          `${projectId}/images/${num}.png`, new Uint8Array(buf),
+          { contentType: imageBlob!.type || "image/png", upsert: true }
+        );
+        await supabase.from("scenes").update({ image_status: "completed", image_attempts: (scene.image_attempts || 0) + 1, image_error: null, needs_review: false })
+          .eq("project_id", projectId).eq("scene_number", num);
+        callbacks.onSceneProgress(num, "image", "done");
+      } catch (e: any) {
+        await supabase.from("scenes").update({ image_status: "failed", image_attempts: (scene.image_attempts || 0) + 1, image_error: e.message, needs_review: true })
+          .eq("project_id", projectId).eq("scene_number", num);
+        callbacks.onSceneProgress(num, "image", "failed");
+      }
+    }
+
+    if (scene.audio_status !== "completed") {
+      callbacks.onSceneProgress(num, "audio", "generating");
+      try {
+        let audioBlob: Blob;
+        if (settings.ttsProvider === "inworld" && settings.inworldApiKey) {
+          audioBlob = await generateInworldAudio(
+            scene.tts_text || scene.script_text || "",
+            settings.inworldApiKey,
+            scene.voice_id || settings.voiceId,
+            settings.modelId
+          );
+        } else {
+          audioBlob = generateMockAudio();
+        }
+        const buf = await audioBlob.arrayBuffer();
+        await supabase.storage.from("project-assets").upload(
+          `${projectId}/audio/${num}.mp3`, new Uint8Array(buf),
+          { contentType: "audio/mpeg", upsert: true }
+        );
+        await supabase.from("scenes").update({ audio_status: "completed", audio_attempts: (scene.audio_attempts || 0) + 1, audio_error: null, needs_review: false })
+          .eq("project_id", projectId).eq("scene_number", num);
+        callbacks.onSceneProgress(num, "audio", "done");
+      } catch (e: any) {
+        await supabase.from("scenes").update({ audio_status: "failed", audio_attempts: (scene.audio_attempts || 0) + 1, audio_error: e.message, needs_review: true })
+          .eq("project_id", projectId).eq("scene_number", num);
+        callbacks.onSceneProgress(num, "audio", "failed");
+      }
+    }
+
+    // Update stats
+    const { data: allScenes } = await supabase.from("scenes").select("image_status, audio_status, needs_review").eq("project_id", projectId);
+    if (allScenes) {
+      const st = {
+        sceneCount: allScenes.length,
+        imagesCompleted: allScenes.filter(s => s.image_status === "completed").length,
+        audioCompleted: allScenes.filter(s => s.audio_status === "completed").length,
+        imagesFailed: allScenes.filter(s => s.image_status === "failed").length,
+        audioFailed: allScenes.filter(s => s.audio_status === "failed").length,
+        needsReviewCount: allScenes.filter(s => s.needs_review).length,
+      };
+      callbacks.onStats({ ...st, total: st.sceneCount });
+      await supabase.from("projects").update({ stats: st }).eq("id", projectId);
+    }
+  }
+
+  // Final status
+  const { data: allScenes } = await supabase.from("scenes").select("image_status, audio_status").eq("project_id", projectId);
+  if (allScenes) {
+    const hasFailed = allScenes.some(s => s.image_status === "failed" || s.audio_status === "failed");
+    const hasPending = allScenes.some(s => s.image_status === "pending" || s.audio_status === "pending");
+    const finalStatus = hasPending ? "processing" : hasFailed ? "partial" : "completed";
+    await supabase.from("projects").update({ status: finalStatus }).eq("id", projectId);
+  }
+}
