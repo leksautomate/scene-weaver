@@ -35,6 +35,8 @@ export interface Scene {
   image_error: string | null;
   audio_error: string | null;
   needs_review: boolean;
+  voice_id?: string | null;
+  project_id?: string;
 }
 
 export interface ProjectStats {

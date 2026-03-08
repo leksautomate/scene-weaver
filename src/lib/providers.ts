@@ -16,6 +16,21 @@ export interface ProviderSettings {
   inworldApiKey: string;
 }
 
+export interface InworldVoice {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export const INWORLD_VOICES: InworldVoice[] = [
+  { id: "Dennis", name: "Dennis", description: "Male, warm baritone narrator" },
+  { id: "Eleanor", name: "Eleanor", description: "Female, elegant and composed" },
+  { id: "James", name: "James", description: "Male, authoritative and deep" },
+  { id: "Linda", name: "Linda", description: "Female, friendly and clear" },
+  { id: "Brian", name: "Brian", description: "Male, calm and neutral" },
+  { id: "Amy", name: "Amy", description: "Female, youthful and energetic" },
+];
+
 const DEFAULTS: ProviderSettings = {
   imageProvider: "ai",
   ttsProvider: "inworld",
