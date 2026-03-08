@@ -4,9 +4,24 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Save, Eye, EyeOff } from "lucide-react";
+import { Save, Eye, EyeOff, CheckCircle2, XCircle, Loader2, Wifi } from "lucide-react";
 import { loadProviderSettings, saveProviderSettings, INWORLD_VOICES, type ProviderSettings } from "@/lib/providers";
+
+type HealthStatus = "idle" | "checking" | "ok" | "error";
+
+function StatusIndicator({ status, message }: { status: HealthStatus; message?: string }) {
+  if (status === "idle") return null;
+  if (status === "checking") return <Badge variant="secondary" className="text-xs"><Loader2 className="h-3 w-3 animate-spin mr-1" />Checking...</Badge>;
+  if (status === "ok") return <Badge className="bg-success/20 text-success border-success/30 text-xs"><CheckCircle2 className="h-3 w-3 mr-1" />Connected</Badge>;
+  return (
+    <div className="space-y-1">
+      <Badge variant="destructive" className="text-xs"><XCircle className="h-3 w-3 mr-1" />Failed</Badge>
+      {message && <p className="text-xs text-destructive">{message}</p>}
+    </div>
+  );
+}
 
 export default function Settings() {
   const [settings, setSettings] = useState<ProviderSettings>(loadProviderSettings);
@@ -14,14 +29,95 @@ export default function Settings() {
   const [showWhisk, setShowWhisk] = useState(false);
   const [showInworld, setShowInworld] = useState(false);
 
+  const [groqStatus, setGroqStatus] = useState<HealthStatus>("idle");
+  const [groqMsg, setGroqMsg] = useState("");
+  const [whiskStatus, setWhiskStatus] = useState<HealthStatus>("idle");
+  const [whiskMsg, setWhiskMsg] = useState("");
+  const [inworldStatus, setInworldStatus] = useState<HealthStatus>("idle");
+  const [inworldMsg, setInworldMsg] = useState("");
+
   const save = () => {
     saveProviderSettings(settings);
     toast.success("Settings saved");
   };
 
+  const testGroq = async () => {
+    if (!settings.groqApiKey) { setGroqStatus("error"); setGroqMsg("No API key provided"); return; }
+    setGroqStatus("checking"); setGroqMsg("");
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/models", {
+        headers: { Authorization: `Bearer ${settings.groqApiKey}` },
+      });
+      if (res.status === 401) { setGroqStatus("error"); setGroqMsg("Invalid API key"); return; }
+      if (res.status === 429) { setGroqStatus("error"); setGroqMsg("Rate limited — try again later"); return; }
+      if (!res.ok) { setGroqStatus("error"); setGroqMsg(`HTTP ${res.status}`); return; }
+      setGroqStatus("ok");
+    } catch (e: any) {
+      setGroqStatus("error"); setGroqMsg(e.message?.includes("fetch") ? "Network error — check connectivity" : e.message);
+    }
+  };
+
+  const testWhisk = async () => {
+    if (!settings.whiskCookie) { setWhiskStatus("error"); setWhiskMsg("No cookie provided"); return; }
+    setWhiskStatus("checking"); setWhiskMsg("");
+    try {
+      const res = await fetch("https://labs.google/fx/api/auth/session", {
+        headers: { cookie: settings.whiskCookie },
+      });
+      if (res.status === 401 || res.status === 403) { setWhiskStatus("error"); setWhiskMsg("Cookie expired or invalid"); return; }
+      if (!res.ok) { setWhiskStatus("error"); setWhiskMsg(`HTTP ${res.status}`); return; }
+      const data = await res.json();
+      if (!data?.access_token) { setWhiskStatus("error"); setWhiskMsg("No access token — cookie may be expired"); return; }
+      setWhiskStatus("ok");
+    } catch (e: any) {
+      setWhiskStatus("error"); setWhiskMsg(e.message?.includes("fetch") ? "CORS blocked — this is expected from browser. Whisk calls work during generation." : e.message);
+    }
+  };
+
+  const testInworld = async () => {
+    if (!settings.inworldApiKey) { setInworldStatus("error"); setInworldMsg("No API key provided"); return; }
+    setInworldStatus("checking"); setInworldMsg("");
+    try {
+      const res = await fetch("https://api.inworld.ai/tts/v1/voice", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${settings.inworldApiKey}`,
+        },
+        body: JSON.stringify({
+          text: "test",
+          voiceId: "Dennis",
+          modelId: "inworld-tts-1.5-max",
+          audioConfig: { audioEncoding: "MP3", sampleRateHertz: 22050 },
+          temperature: 1.0,
+          applyTextNormalization: "ON",
+        }),
+      });
+      if (res.status === 401 || res.status === 403) { setInworldStatus("error"); setInworldMsg("Invalid API key"); return; }
+      if (res.status === 429) { setInworldStatus("error"); setInworldMsg("Rate limited"); return; }
+      if (!res.ok) { setInworldStatus("error"); setInworldMsg(`HTTP ${res.status}`); return; }
+      const data = await res.json();
+      if (!data?.audioContent) { setInworldStatus("error"); setInworldMsg("No audio returned"); return; }
+      setInworldStatus("ok");
+    } catch (e: any) {
+      setInworldStatus("error"); setInworldMsg(e.message?.includes("fetch") ? "Network error — check connectivity" : e.message);
+    }
+  };
+
+  const testAll = () => {
+    testGroq();
+    testWhisk();
+    testInworld();
+  };
+
   return (
     <div className="p-6 md:p-12 max-w-3xl mx-auto space-y-6">
-      <h1 className="text-2xl font-display text-foreground">Settings</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-display text-foreground">Settings</h1>
+        <Button variant="outline" size="sm" onClick={testAll}>
+          <Wifi className="h-4 w-4 mr-2" />Test All Connections
+        </Button>
+      </div>
 
       {/* API Keys */}
       <Card>
@@ -30,13 +126,21 @@ export default function Settings() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Groq API Key</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-foreground">Groq API Key</label>
+              <div className="flex items-center gap-2">
+                <StatusIndicator status={groqStatus} message={groqMsg} />
+                <Button variant="ghost" size="sm" onClick={testGroq} className="text-xs h-7">
+                  {groqStatus === "checking" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
+                </Button>
+              </div>
+            </div>
             <div className="flex gap-2">
               <Input
                 type={showGroq ? "text" : "password"}
                 placeholder="gsk_..."
                 value={settings.groqApiKey}
-                onChange={(e) => setSettings((s) => ({ ...s, groqApiKey: e.target.value }))}
+                onChange={(e) => { setSettings((s) => ({ ...s, groqApiKey: e.target.value })); setGroqStatus("idle"); }}
                 className="bg-secondary flex-1"
               />
               <Button variant="ghost" size="icon" onClick={() => setShowGroq(!showGroq)}>
@@ -49,13 +153,21 @@ export default function Settings() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Whisk Cookie</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-foreground">Whisk Cookie</label>
+              <div className="flex items-center gap-2">
+                <StatusIndicator status={whiskStatus} message={whiskMsg} />
+                <Button variant="ghost" size="sm" onClick={testWhisk} className="text-xs h-7">
+                  {whiskStatus === "checking" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
+                </Button>
+              </div>
+            </div>
             <div className="flex gap-2">
               <Input
                 type={showWhisk ? "text" : "password"}
                 placeholder="Cookie from labs.google"
                 value={settings.whiskCookie}
-                onChange={(e) => setSettings((s) => ({ ...s, whiskCookie: e.target.value }))}
+                onChange={(e) => { setSettings((s) => ({ ...s, whiskCookie: e.target.value })); setWhiskStatus("idle"); }}
                 className="bg-secondary flex-1"
               />
               <Button variant="ghost" size="icon" onClick={() => setShowWhisk(!showWhisk)}>
@@ -68,13 +180,21 @@ export default function Settings() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Inworld API Key</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-foreground">Inworld API Key</label>
+              <div className="flex items-center gap-2">
+                <StatusIndicator status={inworldStatus} message={inworldMsg} />
+                <Button variant="ghost" size="sm" onClick={testInworld} className="text-xs h-7">
+                  {inworldStatus === "checking" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
+                </Button>
+              </div>
+            </div>
             <div className="flex gap-2">
               <Input
                 type={showInworld ? "text" : "password"}
                 placeholder="Base64 encoded key"
                 value={settings.inworldApiKey}
-                onChange={(e) => setSettings((s) => ({ ...s, inworldApiKey: e.target.value }))}
+                onChange={(e) => { setSettings((s) => ({ ...s, inworldApiKey: e.target.value })); setInworldStatus("idle"); }}
                 className="bg-secondary flex-1"
               />
               <Button variant="ghost" size="icon" onClick={() => setShowInworld(!showInworld)}>
