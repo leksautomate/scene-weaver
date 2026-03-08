@@ -155,7 +155,59 @@ export async function generateSceneManifest(
 // Whisk — Image generation
 // ========================
 
-export async function generateWhiskImage(prompt: string, cookie: string): Promise<Blob> {
+// Upload an image to Whisk and get a media generation ID for use as a reference
+async function uploadToWhisk(imageBlob: Blob, cookie: string, accessToken: string): Promise<string> {
+  const base64 = await blobToBase64(imageBlob);
+  const uploadRes = await fetch("https://labs.google/fx/api/trpc/backbone.uploadImage", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      cookie,
+    },
+    body: JSON.stringify({
+      json: {
+        imageBytes: base64,
+        mimeType: imageBlob.type || "image/png",
+      },
+    }),
+  });
+  if (!uploadRes.ok) throw new Error(`Whisk upload failed: ${uploadRes.status}`);
+  const uploadData = await uploadRes.json();
+  const mediaId = uploadData?.result?.data?.json?.mediaGenerationId;
+  if (!mediaId) throw new Error("No mediaGenerationId from Whisk upload");
+  return mediaId;
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+// Fetch a style reference image from Supabase storage as a Blob
+async function fetchStyleBlob(projectId: string, filename: string): Promise<Blob | null> {
+  try {
+    const url = getStyleRefUrl(projectId, filename);
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch {
+    return null;
+  }
+}
+
+function getStyleRefUrl(projectId: string, filename: string): string {
+  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+  return `${SUPABASE_URL}/storage/v1/object/public/project-assets/${projectId}/style/${filename}`;
+}
+
+export async function generateWhiskImage(
+  prompt: string,
+  cookie: string,
+  styleImageUrls?: string[]
+): Promise<Blob> {
   // Step 1: Get auth token
   const sessionRes = await fetch("https://labs.google/fx/api/auth/session", {
     headers: { cookie },
@@ -165,35 +217,99 @@ export async function generateWhiskImage(prompt: string, cookie: string): Promis
   const accessToken = session?.access_token;
   if (!accessToken) throw new Error("No access_token in Whisk session");
 
-  // Step 2: Generate image
-  const genRes = await fetch("https://aisandbox-pa.googleapis.com/v1:runImageFx", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      userInput: { candidatesCount: 1, prompts: [prompt] },
-      generationParams: { seed: null },
-      clientContext: { tool: "WHISK" },
-      modelInput: { modelNameType: "IMAGEN_3_5" },
-      aspectRatio: "LANDSCAPE",
-    }),
-  });
-
-  if (!genRes.ok) {
-    const errText = await genRes.text();
-    throw new Error(`Whisk generation failed: ${genRes.status} - ${errText}`);
+  // Step 2: Upload style reference images if provided
+  const styleMediaIds: string[] = [];
+  if (styleImageUrls && styleImageUrls.length > 0) {
+    for (const url of styleImageUrls) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const mediaId = await uploadToWhisk(blob, cookie, accessToken);
+        styleMediaIds.push(mediaId);
+      } catch (e: any) {
+        console.warn(`Failed to upload style ref: ${e.message}`);
+      }
+    }
   }
 
-  const genData = await genRes.json();
-  const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;
-  if (!encodedImage) throw new Error("No image in Whisk response");
+  // Step 3: Generate image — use Recipe endpoint if we have style refs, otherwise plain ImageFx
+  if (styleMediaIds.length > 0) {
+    // Use runImageRecipe with style references
+    const recipeMediaInputs = styleMediaIds.map(id => ({
+      mediaInput: {
+        mediaCategory: "MEDIA_CATEGORY_STYLE",
+        mediaGenerationId: id,
+      },
+    }));
 
-  const binary = atob(encodedImage);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: "image/png" });
+    const genRes = await fetch("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        clientContext: {
+          sessionId: String(Date.now()),
+          tool: "BACKBONE",
+          workflowId: crypto.randomUUID(),
+        },
+        imageModelSettings: {
+          modelNameType: "IMAGEN_3_5",
+          imageAspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE",
+        },
+        recipeMediaInputs,
+        additionalInput: prompt,
+        seed: null,
+      }),
+    });
+
+    if (!genRes.ok) {
+      const errText = await genRes.text();
+      throw new Error(`Whisk recipe generation failed: ${genRes.status} - ${errText}`);
+    }
+
+    const genData = await genRes.json();
+    const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage
+      || genData?.results?.[0]?.encodedImage;
+    if (!encodedImage) throw new Error("No image in Whisk recipe response");
+
+    const binary = atob(encodedImage);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: "image/png" });
+  } else {
+    // Fallback: plain text-to-image via runImageFx
+    const genRes = await fetch("https://aisandbox-pa.googleapis.com/v1:runImageFx", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        userInput: { candidatesCount: 1, prompts: [prompt] },
+        generationParams: { seed: null },
+        clientContext: { tool: "WHISK" },
+        modelInput: { modelNameType: "IMAGEN_3_5" },
+        aspectRatio: "LANDSCAPE",
+      }),
+    });
+
+    if (!genRes.ok) {
+      const errText = await genRes.text();
+      throw new Error(`Whisk generation failed: ${genRes.status} - ${errText}`);
+    }
+
+    const genData = await genRes.json();
+    const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;
+    if (!encodedImage) throw new Error("No image in Whisk response");
+
+    const binary = atob(encodedImage);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: "image/png" });
+  }
 }
 
 // ========================
