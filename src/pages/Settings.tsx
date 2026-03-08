@@ -61,16 +61,24 @@ export default function Settings() {
     if (!settings.whiskCookie) { setWhiskStatus("error"); setWhiskMsg("No cookie provided"); return; }
     setWhiskStatus("checking"); setWhiskMsg("");
     try {
-      const res = await fetch("https://labs.google/fx/api/auth/session", {
-        headers: { cookie: settings.whiskCookie },
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+      const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/whisk-proxy`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+        body: JSON.stringify({ action: "session", cookie: settings.whiskCookie }),
       });
-      if (res.status === 401 || res.status === 403) { setWhiskStatus("error"); setWhiskMsg("Cookie expired or invalid"); return; }
-      if (!res.ok) { setWhiskStatus("error"); setWhiskMsg(`HTTP ${res.status}`); return; }
-      const data = await res.json();
-      if (!data?.access_token) { setWhiskStatus("error"); setWhiskMsg("No access token — cookie may be expired"); return; }
+      if (!res.ok) { setWhiskStatus("error"); setWhiskMsg(`Proxy error: HTTP ${res.status}`); return; }
+      const result = await res.json();
+      if (result.status === 401 || result.status === 403) { setWhiskStatus("error"); setWhiskMsg("Cookie expired or invalid"); return; }
+      if (result.status && result.status >= 400) { setWhiskStatus("error"); setWhiskMsg(`HTTP ${result.status}`); return; }
+      if (!result.data?.access_token) { setWhiskStatus("error"); setWhiskMsg("No access token — cookie may be expired"); return; }
       setWhiskStatus("ok");
     } catch (e: any) {
-      setWhiskStatus("error"); setWhiskMsg(e.message?.includes("fetch") ? "CORS blocked — this is expected from browser. Whisk calls work during generation." : e.message);
+      setWhiskStatus("error"); setWhiskMsg(e.message?.includes("fetch") ? "Network error — check connectivity" : e.message);
     }
   };
 
