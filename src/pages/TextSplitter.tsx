@@ -94,7 +94,7 @@ export default function TextSplitter() {
 
   const outputText = useMemo(() => {
     const sep = joinMode === "single" ? "\n" : "\n\n";
-    return chunks.map((c, i) => `--- Part ${i + 1} (${countWords(c)} words) ---\n${c}`).join(sep);
+    return chunks.join(sep);
   }, [chunks, joinMode]);
 
   const handleDownload = () => {
