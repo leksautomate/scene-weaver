@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { getAssetUrl, regenerateImage, regenerateAudio } from "@/lib/api";
 import type { Scene } from "@/lib/types";
+import AudioPlayer from "@/components/AudioPlayer";
 import {
   Image as ImageIcon,
   Volume2,
@@ -135,11 +136,13 @@ export default function SceneCard({ scene, projectId, onRefresh }: Props) {
               </div>
               <StatusBadge status={scene.audio_status} />
             </div>
-            <div className="aspect-video rounded-md bg-secondary border border-border flex items-center justify-center p-4">
+            <div className="rounded-md bg-secondary border border-border p-3">
               {audioUrl ? (
-                <audio controls className="w-full" src={audioUrl} />
+                <AudioPlayer src={audioUrl} label={`Scene ${scene.scene_number} narration`} />
               ) : (
-                <Volume2 className="h-8 w-8 text-muted-foreground" />
+                <div className="flex items-center justify-center py-6">
+                  <Volume2 className="h-8 w-8 text-muted-foreground" />
+                </div>
               )}
             </div>
             <div className="flex items-center gap-2">
