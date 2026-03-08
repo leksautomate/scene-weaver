@@ -242,6 +242,12 @@ export async function regenerateAssetFrontend(
   if (se || !scene) throw new Error("Scene not found");
 
   if (type === "image") {
+    // Build style reference URLs
+    const styleUrls = [
+      getAssetUrl(projectId, "style", "style1.png"),
+      getAssetUrl(projectId, "style", "style2.png"),
+    ];
+
     try {
       let imageBlob: Blob;
       if (settings.imageProvider === "whisk" && settings.whiskCookie) {
@@ -249,7 +255,7 @@ export async function regenerateAssetFrontend(
         let success = false;
         for (const prompt of allPrompts) {
           try {
-            imageBlob = await generateWhiskImage(prompt, settings.whiskCookie);
+            imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls);
             success = true;
             break;
           } catch (e: any) {
