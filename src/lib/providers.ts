@@ -144,8 +144,10 @@ export async function generateSceneManifest(
   title: string,
   script: string,
   styleSummary: any,
-  groqApiKey: string
+  groqApiKey: string,
+  splitMode: "smart" | "exact" = "smart"
 ): Promise<SceneManifest[]> {
+  const systemPrompt = (splitMode === "exact" ? SCENE_SYSTEM_PROMPT_EXACT : SCENE_SYSTEM_PROMPT_SMART) + "\n" + SCENE_SYSTEM_PROMPT_COMMON;
   const userPrompt = `Title: ${title}\nMode: history\n\nStyle Summary (use this to build the style anchor for ALL prompts):\n${JSON.stringify(styleSummary, null, 2)}\n\nFull Script:\n${script}\n\nSplit this into scenes. Every image_prompt and fallback_prompt MUST start with the same style anchor prefix. Return ONLY the JSON object.`;
 
   const result = await whiskProxy({
