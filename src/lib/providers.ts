@@ -306,10 +306,9 @@ export async function generateWhiskImage(
       accessToken,
       payload: {
         userInput: { candidatesCount: 1, prompts: [prompt] },
-        generationParams: { seed: null },
-        clientContext: { tool: "WHISK" },
+        clientContext: { tool: "IMAGE_FX" },
         modelInput: { modelNameType: "IMAGEN_3_5" },
-        aspectRatio: "LANDSCAPE",
+        aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE",
       },
     });
 
