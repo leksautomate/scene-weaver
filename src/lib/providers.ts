@@ -254,7 +254,6 @@ export async function generateWhiskImage(
 
   // Step 3: Generate image — use Recipe endpoint if we have style refs, otherwise plain ImageFx
   if (styleMediaIds.length > 0) {
-    // Use runImageRecipe with style references
     const recipeMediaInputs = styleMediaIds.map(id => ({
       mediaInput: {
         mediaCategory: "MEDIA_CATEGORY_STYLE",
@@ -262,13 +261,10 @@ export async function generateWhiskImage(
       },
     }));
 
-    const genRes = await fetch("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
+    const genResult = await whiskProxy({
+      action: "generate-recipe",
+      accessToken,
+      payload: {
         clientContext: {
           sessionId: String(Date.now()),
           tool: "BACKBONE",
@@ -281,17 +277,16 @@ export async function generateWhiskImage(
         recipeMediaInputs,
         additionalInput: prompt,
         seed: null,
-      }),
+      },
     });
 
-    if (!genRes.ok) {
-      const errText = await genRes.text();
-      if (genRes.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
-      if (genRes.status === 401 || genRes.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");
-      throw new Error(`Whisk recipe generation failed (HTTP ${genRes.status}): ${errText.substring(0, 200)}`);
+    if (genResult.status && genResult.status >= 400) {
+      if (genResult.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
+      if (genResult.status === 401 || genResult.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");
+      throw new Error(`Whisk recipe generation failed (HTTP ${genResult.status})`);
     }
 
-    const genData = await genRes.json();
+    const genData = genResult.data;
     const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage
       || genData?.results?.[0]?.encodedImage;
     if (!encodedImage) throw new Error("No image in Whisk recipe response");
@@ -301,30 +296,25 @@ export async function generateWhiskImage(
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return new Blob([bytes], { type: "image/png" });
   } else {
-    // Fallback: plain text-to-image via runImageFx
-    const genRes = await fetch("https://aisandbox-pa.googleapis.com/v1:runImageFx", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
+    const genResult = await whiskProxy({
+      action: "generate",
+      accessToken,
+      payload: {
         userInput: { candidatesCount: 1, prompts: [prompt] },
         generationParams: { seed: null },
         clientContext: { tool: "WHISK" },
         modelInput: { modelNameType: "IMAGEN_3_5" },
         aspectRatio: "LANDSCAPE",
-      }),
+      },
     });
 
-    if (!genRes.ok) {
-      const errText = await genRes.text();
-      if (genRes.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
-      if (genRes.status === 401 || genRes.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");
-      throw new Error(`Whisk generation failed (HTTP ${genRes.status}): ${errText.substring(0, 200)}`);
+    if (genResult.status && genResult.status >= 400) {
+      if (genResult.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
+      if (genResult.status === 401 || genResult.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");
+      throw new Error(`Whisk generation failed (HTTP ${genResult.status})`);
     }
 
-    const genData = await genRes.json();
+    const genData = genResult.data;
     const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;
     if (!encodedImage) throw new Error("No image in Whisk response");
 
