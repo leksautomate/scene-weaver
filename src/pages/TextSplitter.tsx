@@ -125,8 +125,9 @@ export default function TextSplitter() {
       </p>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total words</div><div className="text-2xl font-semibold">{words.length}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total characters</div><div className="text-2xl font-semibold">{normalizeText(input).length}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Output parts</div><div className="text-2xl font-semibold">{chunks.length}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Split style</div><div className="text-2xl font-semibold">{splitMode === "smart" ? "Smart" : "Exact"}</div></CardContent></Card>
       </div>
