@@ -7,6 +7,7 @@ import AppLayout from "@/components/AppLayout";
 import Index from "./pages/Index";
 import Projects from "./pages/Projects";
 import ProjectStatus from "./pages/ProjectStatus";
+import ProjectPreview from "./pages/ProjectPreview";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
