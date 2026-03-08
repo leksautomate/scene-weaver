@@ -137,6 +137,13 @@ export async function createProjectFrontend(
   ];
 
   for (const scene of scenes) {
+    // Check if project was stopped
+    const { data: projCheck } = await supabase.from("projects").select("status").eq("id", projectId).single();
+    if (projCheck?.status === "stopped") {
+      callbacks.onPhase("Project stopped by user.");
+      return projectId;
+    }
+
     const num = scene.scene_number;
 
     // Image
