@@ -191,10 +191,13 @@ async function uploadToWhisk(imageBlob: Blob, cookie: string, accessToken: strin
       },
     },
   });
-  if (result.status && result.status >= 400) throw new Error(`Whisk upload failed (${result.status}): ${JSON.stringify(result.data).substring(0, 200)}`);
-  const mediaId = result?.data?.result?.data?.json?.mediaGenerationId
-    || result?.data?.[0]?.result?.data?.json?.mediaGenerationId;
-  if (!mediaId) throw new Error("No mediaGenerationId from Whisk upload");
+  if (result.status && result.status >= 400) throw new Error(`Whisk upload failed (${result.status}): ${JSON.stringify(result.data).substring(0, 300)}`);
+  // Handle both batched array response [{"result":{"data":{"json":...}}}] and direct response
+  const batchItem = Array.isArray(result.data) ? result.data[0] : result.data;
+  const mediaId = batchItem?.result?.data?.json?.mediaGenerationId
+    || batchItem?.data?.json?.mediaGenerationId
+    || result?.data?.result?.data?.json?.mediaGenerationId;
+  if (!mediaId) throw new Error(`No mediaGenerationId from Whisk upload. Response: ${JSON.stringify(result.data).substring(0, 300)}`);
   return mediaId;
 }
 
