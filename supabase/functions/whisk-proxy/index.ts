@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
     // Action: upload — upload image to Whisk
     if (action === "upload") {
       console.log("[whisk-proxy] upload request");
-      const res = await fetch("https://labs.google/fx/api/trpc/backbone.uploadImage", {
+      const res = await fetch("https://labs.google/fx/api/trpc/backbone.uploadImage?batch=1", {
         method: "POST",
         headers: { "Content-Type": "application/json", cookie },
         body: JSON.stringify(payload),
