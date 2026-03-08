@@ -112,16 +112,15 @@ Return ONLY valid JSON matching this exact schema:
   return JSON.parse(content).scenes || [];
 }
 
+// --- Image Providers ---
+
 async function generateAIImage(prompt: string): Promise<Uint8Array | null> {
   const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
   if (!lovableApiKey) return null;
 
   const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${lovableApiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${lovableApiKey}` },
     body: JSON.stringify({
       model: "google/gemini-2.5-flash-image",
       messages: [{ role: "user", content: prompt }],
@@ -130,11 +129,7 @@ async function generateAIImage(prompt: string): Promise<Uint8Array | null> {
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    console.error("Image generation error:", response.status, errText);
-    if (response.status === 429 || response.status === 402) {
-      throw new Error(`Rate limited (${response.status}). Please try again later.`);
-    }
+    if (response.status === 429 || response.status === 402) throw new Error(`Rate limited (${response.status})`);
     throw new Error(`Image generation failed: ${response.status}`);
   }
 
@@ -142,7 +137,6 @@ async function generateAIImage(prompt: string): Promise<Uint8Array | null> {
   const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
   if (!imageUrl) throw new Error("No image in response");
 
-  // Extract base64
   const base64 = imageUrl.replace(/^data:image\/\w+;base64,/, "");
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -150,13 +144,60 @@ async function generateAIImage(prompt: string): Promise<Uint8Array | null> {
   return bytes;
 }
 
-async function generateImageWithFallbacks(prompts: string[]): Promise<Uint8Array> {
+async function generateWhiskImage(prompt: string): Promise<Uint8Array> {
+  const cookie = Deno.env.get("WHISK_COOKIE");
+  if (!cookie) throw new Error("WHISK_COOKIE not configured");
+
+  // Step 1: Get auth token from session
+  const sessionRes = await fetch("https://labs.google/fx/api/auth/session", {
+    headers: { cookie },
+  });
+  if (!sessionRes.ok) throw new Error(`Whisk session failed: ${sessionRes.status}`);
+  const session = await sessionRes.json();
+  const accessToken = session?.access_token;
+  if (!accessToken) throw new Error("No access_token in Whisk session");
+
+  // Step 2: Generate image via ImageFx
+  const genRes = await fetch("https://aisandbox-pa.googleapis.com/v1:runImageFx", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      userInput: { candidatesCount: 1, prompts: [prompt] },
+      generationParams: { seed: null },
+      clientContext: { tool: "WHISK" },
+      modelInput: { modelNameType: "IMAGEN_3_5" },
+      aspectRatio: "LANDSCAPE",
+    }),
+  });
+
+  if (!genRes.ok) {
+    const errText = await genRes.text();
+    throw new Error(`Whisk image generation failed: ${genRes.status} - ${errText}`);
+  }
+
+  const genData = await genRes.json();
+  const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;
+  if (!encodedImage) throw new Error("No image in Whisk response");
+
+  const binary = atob(encodedImage);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function generateImageWithFallbacks(prompts: string[], provider: string): Promise<Uint8Array> {
   for (const prompt of prompts) {
     try {
+      if (provider === "whisk") {
+        return await generateWhiskImage(prompt);
+      }
       const result = await generateAIImage(prompt);
       if (result) return result;
     } catch (e: any) {
-      console.error(`Prompt failed: ${e.message}, trying next...`);
+      console.error(`Prompt failed (${provider}): ${e.message}, trying next...`);
       if (e.message.includes("Rate limited")) throw e;
     }
   }
@@ -172,6 +213,43 @@ function generateMockSVG(sceneNumber: number, prompt: string): string {
   <text x="640" y="380" font-family="sans-serif" font-size="18" fill="#888" text-anchor="middle">MOCK IMAGE</text>
   <text x="640" y="430" font-family="sans-serif" font-size="14" fill="#666" text-anchor="middle">${truncated.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>
 </svg>`;
+}
+
+// --- Audio Providers ---
+
+async function generateInworldAudio(text: string, voiceId: string, modelId: string): Promise<Uint8Array> {
+  const apiKey = Deno.env.get("INWORLD_API_KEY");
+  if (!apiKey) throw new Error("INWORLD_API_KEY not configured");
+
+  const response = await fetch("https://api.inworld.ai/tts/v1/voice", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Basic ${apiKey}`,
+    },
+    body: JSON.stringify({
+      text: text.substring(0, 2000), // API limit
+      voiceId: voiceId || "Dennis",
+      modelId: modelId || "inworld-tts-1.5-max",
+      audioConfig: { audioEncoding: "MP3", sampleRateHertz: 22050 },
+      temperature: 1.0,
+      applyTextNormalization: "ON",
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Inworld TTS failed: ${response.status} - ${errText}`);
+  }
+
+  const data = await response.json();
+  const audioContent = data.audioContent;
+  if (!audioContent) throw new Error("No audioContent in Inworld response");
+
+  const binary = atob(audioContent);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 function generateMockAudio(): Uint8Array {
@@ -201,6 +279,9 @@ serve(async (req) => {
     const title = formData.get("title") as string;
     const script = formData.get("script") as string;
     const imageProvider = (formData.get("imageProvider") as string) || "ai";
+    const ttsProvider = (formData.get("ttsProvider") as string) || "inworld";
+    const voiceId = (formData.get("voiceId") as string) || "Dennis";
+    const modelId = (formData.get("modelId") as string) || "inworld-tts-1.5-max";
     const style1 = formData.get("style1") as File;
     const style2 = formData.get("style2") as File;
 
@@ -211,11 +292,11 @@ serve(async (req) => {
     }
 
     const projectId = generateProjectId();
-    console.log(`Creating project ${projectId}: "${title}" (provider: ${imageProvider})`);
+    console.log(`Creating project ${projectId}: "${title}" (image: ${imageProvider}, tts: ${ttsProvider})`);
 
     const { error: insertErr } = await supabase.from("projects").insert({
       id: projectId, title, mode: "history", status: "processing",
-      settings: { imageProvider, voiceId: "", modelId: "", imageConcurrency: 2, audioConcurrency: 2, historyMode: true },
+      settings: { imageProvider, ttsProvider, voiceId, modelId, imageConcurrency: 2, audioConcurrency: 2, historyMode: true },
       style_summary: DEFAULT_STYLE_SUMMARY,
       stats: { sceneCount: 0, imagesCompleted: 0, audioCompleted: 0, imagesFailed: 0, audioFailed: 0, needsReviewCount: 0 },
     });
@@ -284,15 +365,14 @@ serve(async (req) => {
 
           // Generate image
           try {
-            if (imageProvider === "ai") {
+            if (imageProvider === "ai" || imageProvider === "whisk") {
               const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts || [])];
-              const imageBytes = await generateImageWithFallbacks(allPrompts);
+              const imageBytes = await generateImageWithFallbacks(allPrompts, imageProvider);
               await supabase.storage.from("project-assets").upload(
                 `${projectId}/images/${num}.png`, imageBytes,
                 { contentType: "image/png", upsert: true }
               );
             } else {
-              // Mock
               const svg = generateMockSVG(num, scene.image_prompt || "");
               await supabase.storage.from("project-assets").upload(
                 `${projectId}/images/${num}.png`, new TextEncoder().encode(svg),
@@ -307,9 +387,14 @@ serve(async (req) => {
             imagesFailed++;
           }
 
-          // Generate mock audio
+          // Generate audio
           try {
-            const audioBytes = generateMockAudio();
+            let audioBytes: Uint8Array;
+            if (ttsProvider === "inworld" && Deno.env.get("INWORLD_API_KEY")) {
+              audioBytes = await generateInworldAudio(scene.tts_text || scene.script_text || "", voiceId, modelId);
+            } else {
+              audioBytes = generateMockAudio();
+            }
             await supabase.storage.from("project-assets").upload(
               `${projectId}/audio/${num}.mp3`, audioBytes,
               { contentType: "audio/mpeg", upsert: true }

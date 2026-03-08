@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Save } from "lucide-react";
 
 interface AppSettings {
   imageProvider: string;
+  ttsProvider: string;
   voiceId: string;
   modelId: string;
   imageConcurrency: number;
@@ -17,8 +18,9 @@ interface AppSettings {
 
 const DEFAULTS: AppSettings = {
   imageProvider: "ai",
-  voiceId: "",
-  modelId: "",
+  ttsProvider: "inworld",
+  voiceId: "Dennis",
+  modelId: "inworld-tts-1.5-max",
   imageConcurrency: 2,
   audioConcurrency: 2,
 };
@@ -60,10 +62,15 @@ export default function Settings() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="ai">Lovable AI (Gemini)</SelectItem>
-                <SelectItem value="whisk">Whisk (Google Cookie)</SelectItem>
+                <SelectItem value="whisk">Whisk (Imagen 3.5)</SelectItem>
                 <SelectItem value="mock">Mock (SVG Placeholders)</SelectItem>
               </SelectContent>
             </Select>
+            {settings.imageProvider === "whisk" && (
+              <p className="text-xs text-muted-foreground">
+                Requires WHISK_COOKIE secret. Uses Google Imagen 3.5 via Labs.
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">
@@ -86,22 +93,53 @@ export default function Settings() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">TTS Provider</label>
+            <Select
+              value={settings.ttsProvider}
+              onValueChange={(v) => setSettings((s) => ({ ...s, ttsProvider: v }))}
+            >
+              <SelectTrigger className="bg-secondary">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inworld">Inworld AI</SelectItem>
+                <SelectItem value="mock">Mock (Silent Audio)</SelectItem>
+              </SelectContent>
+            </Select>
+            {settings.ttsProvider === "inworld" && (
+              <p className="text-xs text-muted-foreground">
+                Requires INWORLD_API_KEY secret. Uses Inworld TTS 1.5 Max.
+              </p>
+            )}
+          </div>
+          <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Voice ID</label>
             <Input
-              placeholder="e.g. en-US-Standard-D"
+              placeholder="Dennis"
               value={settings.voiceId}
               onChange={(e) => setSettings((s) => ({ ...s, voiceId: e.target.value }))}
               className="bg-secondary"
             />
+            <p className="text-xs text-muted-foreground">
+              Inworld voice name (e.g. Dennis, Eleanor, James)
+            </p>
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">TTS Model</label>
-            <Input
-              placeholder="e.g. tts-1-hd"
+            <Select
               value={settings.modelId}
-              onChange={(e) => setSettings((s) => ({ ...s, modelId: e.target.value }))}
-              className="bg-secondary"
-            />
+              onValueChange={(v) => setSettings((s) => ({ ...s, modelId: v }))}
+            >
+              <SelectTrigger className="bg-secondary">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inworld-tts-1.5-max">TTS 1.5 Max (Best Quality)</SelectItem>
+                <SelectItem value="inworld-tts-1.5-mini">TTS 1.5 Mini (Faster)</SelectItem>
+                <SelectItem value="inworld-tts-1-max">TTS 1.0 Max (Legacy)</SelectItem>
+                <SelectItem value="inworld-tts-1">TTS 1.0 (Legacy)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">

@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.regenerate-asset]
 verify_jwt = false
+
+[functions.download-project]
+verify_jwt = false

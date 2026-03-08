@@ -81,6 +81,6 @@ export async function getProjects(): Promise<Project[]> {
   return (data || []) as unknown as Project[];
 }
 
-export async function downloadProject(projectId: string): Promise<string> {
+export function getDownloadUrl(projectId: string): string {
   return `${fnUrl("download-project")}?projectId=${projectId}&apikey=${SUPABASE_KEY}`;
 }

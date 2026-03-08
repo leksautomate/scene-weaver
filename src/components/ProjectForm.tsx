@@ -30,10 +30,13 @@ export default function ProjectForm() {
       fd.append("script", script.trim());
       fd.append("style1", style1!);
       fd.append("style2", style2!);
-      // Pass image provider from settings
+      // Pass all settings from localStorage
       try {
         const settings = JSON.parse(localStorage.getItem("historia-settings") || "{}");
         if (settings.imageProvider) fd.append("imageProvider", settings.imageProvider);
+        if (settings.ttsProvider) fd.append("ttsProvider", settings.ttsProvider);
+        if (settings.voiceId) fd.append("voiceId", settings.voiceId);
+        if (settings.modelId) fd.append("modelId", settings.modelId);
       } catch {}
 
       const projectId = await createProject(fd);
