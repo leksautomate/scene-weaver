@@ -44,6 +44,7 @@ export async function createProjectFrontend(
   script: string,
   style1: File | null,
   style2: File | null,
+  options: { voiceId?: string; splitMode?: "smart" | "exact" },
   callbacks: PipelineCallbacks
 ): Promise<string> {
   const settings = loadProviderSettings();
