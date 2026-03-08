@@ -1,0 +1,7 @@
+project_id = "fkwqioqahlhouokpxhmb"
+
+[functions.create-project]
+verify_jwt = false
+
+[functions.regenerate-asset]
+verify_jwt = false
