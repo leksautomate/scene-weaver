@@ -120,8 +120,8 @@ export default function ProjectStatus() {
           </div>
           <Button
             variant="outline"
-            onClick={async () => {
-              const url = await downloadProject(project.id);
+            onClick={() => {
+              const url = getDownloadUrl(project.id);
               window.open(url, "_blank");
             }}
           >
