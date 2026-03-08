@@ -30,6 +30,12 @@ export default function ProjectForm() {
       fd.append("script", script.trim());
       fd.append("style1", style1!);
       fd.append("style2", style2!);
+      // Pass image provider from settings
+      try {
+        const settings = JSON.parse(localStorage.getItem("historia-settings") || "{}");
+        if (settings.imageProvider) fd.append("imageProvider", settings.imageProvider);
+      } catch {}
+
       const projectId = await createProject(fd);
       toast.success("Project created! Generating scenes...");
       navigate(`/projects/${projectId}`);
@@ -41,7 +47,7 @@ export default function ProjectForm() {
   };
 
   return (
-    <div className="min-h-screen bg-background p-6 md:p-12">
+    <div className="p-6 md:p-12">
       <div className="mx-auto max-w-3xl space-y-8">
         <div className="text-center space-y-3">
           <div className="flex items-center justify-center gap-3">

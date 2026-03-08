@@ -1,15 +1,51 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
+
+async function generateAIImage(prompt: string): Promise<Uint8Array | null> {
+  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+  if (!lovableApiKey) return null;
+
+  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${lovableApiKey}`,
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash-image",
+      messages: [{ role: "user", content: prompt }],
+      modalities: ["image", "text"],
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 429 || response.status === 402) {
+      throw new Error(`Rate limited (${response.status})`);
+    }
+    throw new Error(`Image generation failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+  if (!imageUrl) throw new Error("No image in response");
+
+  const base64 = imageUrl.replace(/^data:image\/\w+;base64,/, "");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 function generateMockSVG(sceneNumber: number, prompt: string): string {
   const truncated = prompt.substring(0, 60) + (prompt.length > 60 ? "..." : "");
@@ -47,42 +83,52 @@ serve(async (req) => {
   try {
     const { projectId, sceneNumber, type } = await req.json();
 
-    // Get scene
     const { data: scene, error: se } = await supabase
-      .from("scenes")
-      .select("*")
-      .eq("project_id", projectId)
-      .eq("scene_number", sceneNumber)
-      .single();
+      .from("scenes").select("*")
+      .eq("project_id", projectId).eq("scene_number", sceneNumber).single();
 
     if (se || !scene) {
       return new Response(JSON.stringify({ error: "Scene not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    // Check project image provider
+    const { data: project } = await supabase.from("projects").select("settings").eq("id", projectId).single();
+    const imageProvider = (project?.settings as any)?.imageProvider || "ai";
+
     if (type === "image") {
       try {
-        const svg = generateMockSVG(sceneNumber, scene.image_prompt || "");
-        const svgBytes = new TextEncoder().encode(svg);
-        await supabase.storage.from("project-assets").upload(
-          `${projectId}/images/${sceneNumber}.png`,
-          svgBytes,
-          { contentType: "image/svg+xml", upsert: true }
-        );
+        if (imageProvider === "ai") {
+          const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+          let imageBytes: Uint8Array | null = null;
+          for (const prompt of allPrompts) {
+            try {
+              imageBytes = await generateAIImage(prompt);
+              if (imageBytes) break;
+            } catch (e: any) {
+              console.error(`Prompt failed: ${e.message}`);
+              if (e.message.includes("Rate limited")) throw e;
+            }
+          }
+          if (!imageBytes) throw new Error("All prompts failed");
+          await supabase.storage.from("project-assets").upload(
+            `${projectId}/images/${sceneNumber}.png`, imageBytes,
+            { contentType: "image/png", upsert: true }
+          );
+        } else {
+          const svg = generateMockSVG(sceneNumber, scene.image_prompt || "");
+          await supabase.storage.from("project-assets").upload(
+            `${projectId}/images/${sceneNumber}.png`, new TextEncoder().encode(svg),
+            { contentType: "image/svg+xml", upsert: true }
+          );
+        }
         await supabase.from("scenes").update({
-          image_status: "completed",
-          image_attempts: (scene.image_attempts || 0) + 1,
-          image_error: null,
-          needs_review: false,
+          image_status: "completed", image_attempts: (scene.image_attempts || 0) + 1, image_error: null, needs_review: false,
         }).eq("project_id", projectId).eq("scene_number", sceneNumber);
       } catch (e: any) {
         await supabase.from("scenes").update({
-          image_status: "failed",
-          image_attempts: (scene.image_attempts || 0) + 1,
-          image_error: e.message,
-          needs_review: true,
+          image_status: "failed", image_attempts: (scene.image_attempts || 0) + 1, image_error: e.message, needs_review: true,
         }).eq("project_id", projectId).eq("scene_number", sceneNumber);
         throw e;
       }
@@ -90,33 +136,22 @@ serve(async (req) => {
       try {
         const audioBytes = generateMockAudio();
         await supabase.storage.from("project-assets").upload(
-          `${projectId}/audio/${sceneNumber}.mp3`,
-          audioBytes,
+          `${projectId}/audio/${sceneNumber}.mp3`, audioBytes,
           { contentType: "audio/mpeg", upsert: true }
         );
         await supabase.from("scenes").update({
-          audio_status: "completed",
-          audio_attempts: (scene.audio_attempts || 0) + 1,
-          audio_error: null,
-          needs_review: false,
+          audio_status: "completed", audio_attempts: (scene.audio_attempts || 0) + 1, audio_error: null, needs_review: false,
         }).eq("project_id", projectId).eq("scene_number", sceneNumber);
       } catch (e: any) {
         await supabase.from("scenes").update({
-          audio_status: "failed",
-          audio_attempts: (scene.audio_attempts || 0) + 1,
-          audio_error: e.message,
-          needs_review: true,
+          audio_status: "failed", audio_attempts: (scene.audio_attempts || 0) + 1, audio_error: e.message, needs_review: true,
         }).eq("project_id", projectId).eq("scene_number", sceneNumber);
         throw e;
       }
     }
 
     // Update project stats
-    const { data: allScenes } = await supabase
-      .from("scenes")
-      .select("image_status, audio_status, needs_review")
-      .eq("project_id", projectId);
-
+    const { data: allScenes } = await supabase.from("scenes").select("image_status, audio_status, needs_review").eq("project_id", projectId);
     if (allScenes) {
       const stats = {
         sceneCount: allScenes.length,
@@ -135,8 +170,7 @@ serve(async (req) => {
     });
   } catch (e: any) {
     return new Response(JSON.stringify({ error: e.message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });

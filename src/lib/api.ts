@@ -72,7 +72,15 @@ export function getAssetUrl(projectId: string, type: "images" | "audio" | "style
   return data.publicUrl;
 }
 
+export async function getProjects(): Promise<Project[]> {
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data || []) as unknown as Project[];
+}
+
 export async function downloadProject(projectId: string): Promise<string> {
-  // Return the download URL from edge function
   return `${fnUrl("download-project")}?projectId=${projectId}&apikey=${SUPABASE_KEY}`;
 }

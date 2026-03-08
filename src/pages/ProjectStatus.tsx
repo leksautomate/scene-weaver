@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { getProject, getAssetUrl, downloadProject } from "@/lib/api";
 import type { Project, Scene } from "@/lib/types";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import SceneCard from "@/components/SceneCard";
+import Timeline from "@/components/Timeline";
 import {
   ArrowLeft,
   Download,
@@ -15,7 +16,6 @@ import {
   Volume2,
   AlertTriangle,
   CheckCircle2,
-  Clock,
   Loader2,
   Scroll,
 } from "lucide-react";
@@ -38,6 +38,8 @@ export default function ProjectStatus() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeScene, setActiveScene] = useState<number | undefined>();
+  const sceneRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const fetchData = useCallback(async () => {
     if (!projectId) return;
@@ -55,7 +57,6 @@ export default function ProjectStatus() {
 
   useEffect(() => {
     fetchData();
-    // Poll while processing
     const interval = setInterval(() => {
       if (project?.status === "processing" || project?.status === "created") {
         fetchData();
@@ -64,9 +65,14 @@ export default function ProjectStatus() {
     return () => clearInterval(interval);
   }, [fetchData, project?.status]);
 
+  const scrollToScene = (num: number) => {
+    setActiveScene(num);
+    sceneRefs.current[num]?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
@@ -74,7 +80,7 @@ export default function ProjectStatus() {
 
   if (error || !project) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="flex items-center justify-center h-full">
         <Card className="max-w-md">
           <CardContent className="p-6 text-center space-y-4">
             <AlertTriangle className="h-12 w-12 text-destructive mx-auto" />
@@ -89,16 +95,16 @@ export default function ProjectStatus() {
   }
 
   const stats = project.stats;
-  const imgProgress = stats.sceneCount > 0 ? ((stats.imagesCompleted / stats.sceneCount) * 100) : 0;
-  const audioProgress = stats.sceneCount > 0 ? ((stats.audioCompleted / stats.sceneCount) * 100) : 0;
+  const imgProgress = stats.sceneCount > 0 ? (stats.imagesCompleted / stats.sceneCount) * 100 : 0;
+  const audioProgress = stats.sceneCount > 0 ? (stats.audioCompleted / stats.sceneCount) * 100 : 0;
 
   return (
-    <div className="min-h-screen bg-background p-6 md:p-12">
+    <div className="p-6 md:p-12">
       <div className="mx-auto max-w-5xl space-y-8">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-4">
-            <Link to="/">
+            <Link to="/projects">
               <Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button>
             </Link>
             <div>
@@ -125,30 +131,19 @@ export default function ProjectStatus() {
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-display text-primary">{stats.sceneCount}</p>
-              <p className="text-xs text-muted-foreground">Scenes</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-display text-success">{stats.imagesCompleted}</p>
-              <p className="text-xs text-muted-foreground">Images Done</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-display text-success">{stats.audioCompleted}</p>
-              <p className="text-xs text-muted-foreground">Audio Done</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <p className="text-2xl font-display text-destructive">{stats.needsReviewCount}</p>
-              <p className="text-xs text-muted-foreground">Needs Review</p>
-            </CardContent>
-          </Card>
+          {[
+            { value: stats.sceneCount, label: "Scenes", color: "text-primary" },
+            { value: stats.imagesCompleted, label: "Images Done", color: "text-success" },
+            { value: stats.audioCompleted, label: "Audio Done", color: "text-success" },
+            { value: stats.needsReviewCount, label: "Needs Review", color: "text-destructive" },
+          ].map((s) => (
+            <Card key={s.label}>
+              <CardContent className="p-4 text-center">
+                <p className={`text-2xl font-display ${s.color}`}>{s.value}</p>
+                <p className="text-xs text-muted-foreground">{s.label}</p>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
         {/* Progress */}
@@ -179,6 +174,21 @@ export default function ProjectStatus() {
           </Card>
         </div>
 
+        {/* Timeline */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-display">Scene Timeline</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Timeline
+              scenes={scenes}
+              projectId={project.id}
+              onSelectScene={scrollToScene}
+              activeScene={activeScene}
+            />
+          </CardContent>
+        </Card>
+
         {/* Style References */}
         <Card>
           <CardHeader>
@@ -204,9 +214,7 @@ export default function ProjectStatus() {
 
         {/* Scenes */}
         <div className="space-y-4">
-          <h2 className="text-xl font-display text-foreground">
-            Scenes ({scenes.length})
-          </h2>
+          <h2 className="text-xl font-display text-foreground">Scenes ({scenes.length})</h2>
           {scenes.length === 0 && project.status === "processing" && (
             <Card>
               <CardContent className="p-8 text-center">
@@ -216,12 +224,12 @@ export default function ProjectStatus() {
             </Card>
           )}
           {scenes.map((scene) => (
-            <SceneCard
+            <div
               key={scene.scene_number}
-              scene={scene}
-              projectId={project.id}
-              onRefresh={fetchData}
-            />
+              ref={(el) => { sceneRefs.current[scene.scene_number] = el; }}
+            >
+              <SceneCard scene={scene} projectId={project.id} onRefresh={fetchData} />
+            </div>
           ))}
         </div>
       </div>
