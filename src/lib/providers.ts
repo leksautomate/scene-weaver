@@ -211,11 +211,18 @@ export async function generateWhiskImage(
   // Step 1: Get auth token
   const sessionRes = await fetch("https://labs.google/fx/api/auth/session", {
     headers: { cookie },
+  }).catch((e) => {
+    throw new Error(`Whisk connection failed — this is likely a CORS issue. Whisk API calls must be made from a browser with the correct cookie. Details: ${e.message}`);
   });
-  if (!sessionRes.ok) throw new Error(`Whisk session failed: ${sessionRes.status}`);
+  if (sessionRes.status === 401 || sessionRes.status === 403) {
+    throw new Error("Whisk cookie expired or invalid. Go to Settings and update your Whisk Cookie (copy fresh from labs.google).");
+  }
+  if (!sessionRes.ok) {
+    throw new Error(`Whisk session failed (HTTP ${sessionRes.status}). Check your Whisk Cookie in Settings.`);
+  }
   const session = await sessionRes.json();
   const accessToken = session?.access_token;
-  if (!accessToken) throw new Error("No access_token in Whisk session");
+  if (!accessToken) throw new Error("No access_token in Whisk session — cookie may be expired. Update it in Settings.");
 
   // Step 2: Upload style reference images if provided
   const styleMediaIds: string[] = [];
