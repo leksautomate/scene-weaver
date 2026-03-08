@@ -9,6 +9,7 @@ import Projects from "./pages/Projects";
 import ProjectStatus from "./pages/ProjectStatus";
 import ProjectPreview from "./pages/ProjectPreview";
 import Settings from "./pages/Settings";
+import ErrorLog from "./pages/ErrorLog";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
