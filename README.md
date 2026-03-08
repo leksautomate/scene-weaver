@@ -46,6 +46,12 @@ Historia automates the production pipeline for historical documentary content:
 - **Per-scene voice** — override the default voice for individual scenes
 - **Image & audio regeneration** — regenerate individual assets with updated prompts
 
+### Smart Text Splitter
+- **Smart mode** — keeps sentences together, breaks at natural punctuation (periods, commas, colons, semicolons)
+- **Exact mode** — strict word-count splitting for precise control
+- **Configurable tolerance** — allow parts to be slightly shorter or longer for natural breaks
+- **Copy & download** — copy individual parts or download all as a `.txt` file
+
 ### Settings & Health Checks
 - **API connection testing** — test each provider (Groq, Whisk, Inworld) with one click
 - **Green/red status indicators** — instant visual feedback with detailed error messages
