@@ -20,19 +20,27 @@ npm run dev
 Historia automates the production pipeline for historical documentary content:
 
 1. **Write a script** — paste your historical narrative
-2. **Upload style references** — provide 1-2 reference images to guide the visual style
-3. **AI generates scenes** — Groq (Llama 3.3) splits your script into visual scenes with cinematic image prompts
-4. **Image generation** — Google Whisk (Imagen 3.5) creates historically-accurate images using your style references
-5. **Voice narration** — Inworld AI generates professional text-to-speech audio per scene
-6. **Preview & refine** — use the built-in cinematic player to review, edit prompts, and regenerate assets
+2. **Upload style references** — provide 2 reference images to guide the visual style
+3. **Choose voice & split mode** — select a narration voice and how the script is divided into scenes
+4. **AI generates scenes** — Groq (Llama 3.3) splits your script into visual scenes with cinematic image prompts
+5. **Image generation** — Google Whisk (Imagen 3.5) creates historically-accurate images using your style references
+6. **Voice narration** — Inworld AI generates professional text-to-speech audio per scene
+7. **Preview & refine** — use the built-in cinematic player to review, edit prompts, and regenerate assets
 
 ## Features
 
-### Project Pipeline
+### Project Creation
+- **Voice selection** — choose from 6 Inworld narration voices (Dennis, Eleanor, James, Linda, Brian, Amy)
+- **Script split modes** — "Smart" (sentence-aware 2–4 sentence beats) or "Exact" (paragraph boundaries)
+- **Dual style references** — upload 2 images to anchor the visual tone across all generated scenes
+- **Real-time progress** — progress bar with per-scene status updates during generation
+
+### Scene Pipeline
 - **Automatic scene splitting** — AI analyzes script structure, identifies scene breaks by location/action/emotion
 - **Cinematic image prompts** — generates detailed prompts with historical accuracy, anonymous figures, and documentary framing
 - **Fallback prompts** — 3 progressive fallbacks per scene if primary prompt fails
 - **Bulk retry** — one-click retry for all failed assets
+- **TTS text preservation** — narration text is kept identical to the original script (no rephrasing)
 
 ### Scene Preview Player
 - **Full-screen image viewer** with subtitle overlay showing script text
@@ -46,8 +54,8 @@ Historia automates the production pipeline for historical documentary content:
 - **Per-scene voice** — override the default voice for individual scenes
 - **Image & audio regeneration** — regenerate individual assets with updated prompts
 
-### Smart Text Splitter
-- **Smart mode** — keeps sentences together, breaks at natural punctuation (periods, commas, colons, semicolons)
+### Smart Text Splitter (Utility)
+- **Smart mode** — keeps sentences together, breaks at natural punctuation
 - **Exact mode** — strict word-count splitting for precise control
 - **Configurable tolerance** — allow parts to be slightly shorter or longer for natural breaks
 - **Copy & download** — copy individual parts or download all as a `.txt` file
@@ -79,14 +87,9 @@ Historia automates the production pipeline for historical documentary content:
 ### Installation
 
 ```bash
-# Clone the repo
 git clone <YOUR_GIT_URL>
 cd historia
-
-# Install dependencies
 npm install
-
-# Start dev server
 npm run dev
 ```
 
@@ -113,17 +116,15 @@ Use the **"Test All Connections"** button to verify each key works.
 
 | Route | Description |
 |-------|-------------|
-| `/` | Home / new project form |
+| `/` | Home — new project form with voice & split mode selection |
 | `/projects` | Project list |
 | `/projects/:id` | Project status, stats, scene cards |
 | `/projects/:id/preview` | Cinematic preview player |
 | `/settings` | API keys, provider config, health checks |
 | `/errors` | Error log viewer |
-| `/text-splitter` | Smart text splitter — split by sentences or exact word count |
+| `/text-splitter` | Smart text splitter utility |
 
 ## Error Handling
-
-The app provides contextual error messages for common failure scenarios:
 
 - **Missing API keys** — prompts user to configure in Settings
 - **Whisk authentication** — detects expired cookies with actionable guidance
@@ -140,27 +141,32 @@ The app provides contextual error messages for common failure scenarios:
 │   ├── components/
 │   │   ├── AppLayout.tsx     # Main layout with sidebar
 │   │   ├── AudioPlayer.tsx   # Inline audio player
-│   │   ├── ProjectForm.tsx   # New project creation form
+│   │   ├── ProjectForm.tsx   # New project form (voice, split mode, style refs)
 │   │   ├── SceneCard.tsx     # Scene detail card with editing
 │   │   ├── SplitSceneDialog.tsx
 │   │   ├── Timeline.tsx      # Horizontal scene timeline
 │   │   └── ui/               # shadcn/ui components
 │   ├── lib/
-│   │   ├── api.ts            # Pipeline orchestration, CRUD
+│   │   ├── api.ts            # Pipeline orchestration, CRUD, bulk operations
 │   │   ├── providers.ts      # AI integrations (Groq, Whisk, Inworld)
-│   │   └── types.ts          # TypeScript interfaces
+│   │   ├── types.ts          # TypeScript interfaces
+│   │   └── utils.ts          # Utility functions
 │   ├── pages/
-│   │   ├── Index.tsx
-│   │   ├── Projects.tsx
-│   │   ├── ProjectStatus.tsx
+│   │   ├── Index.tsx          # Home / project form
+│   │   ├── Projects.tsx       # Project list
+│   │   ├── ProjectStatus.tsx  # Project detail + scene cards
 │   │   ├── ProjectPreview.tsx # Cinematic preview player
-│   │   ├── Settings.tsx      # Config + health checks
-│   │   ├── ErrorLog.tsx      # Error log viewer
-│   │   └── TextSplitter.tsx  # Smart text splitter utility
+│   │   ├── Settings.tsx       # Config + health checks
+│   │   ├── ErrorLog.tsx       # Error log viewer
+│   │   └── TextSplitter.tsx   # Smart text splitter utility
 │   └── integrations/
-│       └── supabase/         # Auto-generated client
+│       └── supabase/          # Auto-generated client & types
 └── supabase/
-    └── functions/            # Edge functions
+    └── functions/
+        ├── create-project/    # Project creation edge function
+        ├── download-project/  # Project download/export
+        ├── regenerate-asset/  # Asset regeneration
+        └── whisk-proxy/       # Whisk API proxy (CORS bypass)
 ```
 
 ## Database Schema
@@ -171,8 +177,8 @@ The app provides contextual error messages for common failure scenarios:
 | `id` | text | e.g. `proj_abc12345` |
 | `title` | text | Project name |
 | `status` | text | `created`, `processing`, `completed`, `partial`, `failed` |
-| `settings` | jsonb | Provider configuration |
-| `style_summary` | jsonb | Visual style guide |
+| `settings` | jsonb | Voice ID, split mode, provider config |
+| `style_summary` | jsonb | Visual style guide (palette, lighting, framing, mood) |
 | `stats` | jsonb | Scene/image/audio counts |
 
 ### `scenes`
@@ -181,7 +187,7 @@ The app provides contextual error messages for common failure scenarios:
 | `project_id` | text | FK to projects |
 | `scene_number` | int | Sequential scene index |
 | `script_text` | text | Original script chunk |
-| `tts_text` | text | Narration text |
+| `tts_text` | text | Narration text (identical to script_text) |
 | `image_prompt` | text | Cinematic image prompt |
 | `fallback_prompts` | jsonb | Array of simpler alternatives |
 | `image_status` / `audio_status` | text | `pending`, `completed`, `failed` |
