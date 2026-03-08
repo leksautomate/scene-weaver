@@ -122,13 +122,10 @@ export async function generateSceneManifest(
 ): Promise<SceneManifest[]> {
   const userPrompt = `Title: ${title}\nMode: history\n\nStyle Summary:\n${JSON.stringify(styleSummary, null, 2)}\n\nFull Script:\n${script}\n\nSplit this into scenes. Return ONLY the JSON object.`;
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${groqApiKey}`,
-    },
-    body: JSON.stringify({
+  const result = await whiskProxy({
+    action: "groq-chat",
+    apiKey: groqApiKey,
+    payload: {
       model: "llama-3.3-70b-versatile",
       messages: [
         { role: "system", content: SCENE_SYSTEM_PROMPT },
@@ -136,18 +133,20 @@ export async function generateSceneManifest(
       ],
       temperature: 0.3,
       response_format: { type: "json_object" },
-    }),
+    },
   });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    if (response.status === 429) throw new Error("Groq rate limited — wait a moment and try again.");
-    if (response.status === 401) throw new Error("Groq API key is invalid. Update it in Settings.");
-    throw new Error(`Groq API error (HTTP ${response.status}): ${errText.substring(0, 200)}`);
+  if (result.status && result.status >= 400) {
+    const errText = typeof result.data === "string"
+      ? result.data
+      : JSON.stringify(result.data || {}).substring(0, 500);
+    if (result.status === 429) throw new Error("Groq rate limited — wait a moment and try again.");
+    if (result.status === 401) throw new Error("Groq API key is invalid. Update it in Settings.");
+    throw new Error(`Groq API error (HTTP ${result.status}): ${errText.substring(0, 200)}`);
   }
 
-  const data = await response.json();
-  let content = data.choices?.[0]?.message?.content;
+  const data = result.data;
+  let content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error("No content from Groq");
   content = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
   return JSON.parse(content).scenes || [];
@@ -395,13 +394,10 @@ export async function regenerateImagePrompt(
     historicalLook: "realistic period atmosphere, grounded environments",
   };
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${groqApiKey}`,
-    },
-    body: JSON.stringify({
+  const result = await whiskProxy({
+    action: "groq-chat",
+    apiKey: groqApiKey,
+    payload: {
       model: "llama-3.3-70b-versatile",
       messages: [
         {
@@ -414,16 +410,18 @@ export async function regenerateImagePrompt(
         },
       ],
       temperature: 0.4,
-    }),
+    },
   });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Groq error: ${response.status} - ${errText}`);
+  if (result.status && result.status >= 400) {
+    const errText = typeof result.data === "string"
+      ? result.data
+      : JSON.stringify(result.data || {}).substring(0, 500);
+    throw new Error(`Groq error: ${result.status} - ${errText}`);
   }
 
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
+  const data = result.data;
+  const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error("No content from Groq");
   return content.trim();
 }

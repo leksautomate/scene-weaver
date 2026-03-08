@@ -85,6 +85,34 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Action: groq-chat — proxy scene/prompt generation to avoid browser CORS/network failures
+    if (action === "groq-chat") {
+      const key = body.apiKey || Deno.env.get("GROQ_API_KEY");
+      if (!key) {
+        return new Response(JSON.stringify({ status: 500, data: { error: "GROQ_API_KEY not configured" } }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text();
+      console.log(`[whisk-proxy] groq-chat status=${res.status} body=${text.substring(0, 500)}`);
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.substring(0, 1000) }; }
+
+      return new Response(JSON.stringify({ status: res.status, data }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     return new Response(JSON.stringify({ error: "Unknown action" }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
