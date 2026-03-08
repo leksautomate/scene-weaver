@@ -17,6 +17,7 @@ import {
 const items = [
   { title: "New Project", url: "/", icon: Plus },
   { title: "Projects", url: "/projects", icon: FolderOpen },
+  { title: "Error Log", url: "/errors", icon: AlertTriangle },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 

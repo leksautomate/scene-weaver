@@ -27,6 +27,7 @@ const App = () => (
             <Route path="/projects/:projectId" element={<ProjectStatus />} />
             <Route path="/projects/:projectId/preview" element={<ProjectPreview />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/errors" element={<ErrorLog />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AppLayout>
