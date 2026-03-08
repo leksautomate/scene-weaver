@@ -183,14 +183,17 @@ async function uploadToWhisk(imageBlob: Blob, cookie: string, accessToken: strin
     action: "upload",
     cookie,
     payload: {
-      json: {
-        imageBytes: base64,
-        mimeType: imageBlob.type || "image/png",
+      "0": {
+        json: {
+          imageBytes: base64,
+          mimeType: imageBlob.type || "image/png",
+        },
       },
     },
   });
-  if (result.status && result.status >= 400) throw new Error(`Whisk upload failed: ${result.status}`);
-  const mediaId = result?.data?.result?.data?.json?.mediaGenerationId;
+  if (result.status && result.status >= 400) throw new Error(`Whisk upload failed (${result.status}): ${JSON.stringify(result.data).substring(0, 200)}`);
+  const mediaId = result?.data?.result?.data?.json?.mediaGenerationId
+    || result?.data?.[0]?.result?.data?.json?.mediaGenerationId;
   if (!mediaId) throw new Error("No mediaGenerationId from Whisk upload");
   return mediaId;
 }
