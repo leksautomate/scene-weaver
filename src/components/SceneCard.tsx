@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { getAssetUrl, regenerateImage, regenerateAudio } from "@/lib/api";
+import { getAssetUrl } from "@/lib/api";
+import { regenerateAssetFrontend } from "@/lib/api";
 import type { Scene } from "@/lib/types";
 import AudioPlayer from "@/components/AudioPlayer";
 import {
