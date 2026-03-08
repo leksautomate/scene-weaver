@@ -100,7 +100,7 @@ const SCENE_SYSTEM_PROMPT_COMMON = `- Keep scene_number sequential from 1
 - Assign historical_period
 - Assign visual_priority: character | environment | object
 - image_file = {scene_number}.png, audio_file = {scene_number}.mp3
-- tts_text should be the narration for that scene
+- tts_text must be IDENTICAL to script_text — do not rephrase, rewrite, or summarize
 - All image prompts must end with style keywords like "cinematic realism, historical atmosphere, consistent art style"
 
 Replace famous individuals with generic descriptions:
