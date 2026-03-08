@@ -17,10 +17,12 @@ Deno.serve(async (req) => {
 
     // Action: session — get access token from cookie
     if (action === "session") {
+      console.log("[whisk-proxy] session request");
       const res = await fetch("https://labs.google/fx/api/auth/session", {
         headers: { cookie },
       });
       const data = await res.json();
+      console.log(`[whisk-proxy] session status=${res.status}`);
       return new Response(JSON.stringify({ status: res.status, data }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -28,12 +30,16 @@ Deno.serve(async (req) => {
 
     // Action: upload — upload image to Whisk
     if (action === "upload") {
+      console.log("[whisk-proxy] upload request");
       const res = await fetch("https://labs.google/fx/api/trpc/backbone.uploadImage", {
         method: "POST",
         headers: { "Content-Type": "application/json", cookie },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const text = await res.text();
+      console.log(`[whisk-proxy] upload status=${res.status} body=${text.substring(0, 500)}`);
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.substring(0, 1000) }; }
       return new Response(JSON.stringify({ status: res.status, data }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -41,6 +47,7 @@ Deno.serve(async (req) => {
 
     // Action: generate-recipe — run image recipe with style refs
     if (action === "generate-recipe") {
+      console.log(`[whisk-proxy] generate-recipe request, payload keys: ${Object.keys(payload || {}).join(",")}`);
       const res = await fetch("https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe", {
         method: "POST",
         headers: {
@@ -49,7 +56,10 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const text = await res.text();
+      console.log(`[whisk-proxy] generate-recipe status=${res.status} body=${text.substring(0, 1000)}`);
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.substring(0, 1000) }; }
       return new Response(JSON.stringify({ status: res.status, data }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -57,6 +67,7 @@ Deno.serve(async (req) => {
 
     // Action: generate — plain text-to-image
     if (action === "generate") {
+      console.log(`[whisk-proxy] generate request, prompt preview: ${JSON.stringify(payload).substring(0, 200)}`);
       const res = await fetch("https://aisandbox-pa.googleapis.com/v1:runImageFx", {
         method: "POST",
         headers: {
@@ -65,7 +76,10 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const text = await res.text();
+      console.log(`[whisk-proxy] generate status=${res.status} body=${text.substring(0, 1000)}`);
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.substring(0, 1000) }; }
       return new Response(JSON.stringify({ status: res.status, data }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -76,6 +90,7 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
+    console.error("[whisk-proxy] error:", e.message);
     return new Response(JSON.stringify({ error: e.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

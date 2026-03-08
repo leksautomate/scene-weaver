@@ -281,9 +281,11 @@ export async function generateWhiskImage(
     });
 
     if (genResult.status && genResult.status >= 400) {
+      const detail = JSON.stringify(genResult.data).substring(0, 300);
+      console.error(`Whisk recipe error ${genResult.status}:`, detail);
       if (genResult.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
       if (genResult.status === 401 || genResult.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");
-      throw new Error(`Whisk recipe generation failed (HTTP ${genResult.status})`);
+      throw new Error(`Whisk recipe failed (${genResult.status}): ${detail}`);
     }
 
     const genData = genResult.data;
@@ -309,9 +311,11 @@ export async function generateWhiskImage(
     });
 
     if (genResult.status && genResult.status >= 400) {
+      const detail = JSON.stringify(genResult.data).substring(0, 300);
+      console.error(`Whisk generate error ${genResult.status}:`, detail);
       if (genResult.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
       if (genResult.status === 401 || genResult.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");
-      throw new Error(`Whisk generation failed (HTTP ${genResult.status})`);
+      throw new Error(`Whisk failed (${genResult.status}): ${detail}`);
     }
 
     const genData = genResult.data;
