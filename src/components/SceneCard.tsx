@@ -220,7 +220,10 @@ export default function SceneCard({ scene, projectId, onRefresh }: Props) {
           {/* Editable text */}
           <div className="space-y-2 text-sm">
             {renderEditable("Script", "script", scene.script_text)}
-            {renderEditable("TTS", "tts", scene.tts_text)}
+            <div>
+              <span className="text-muted-foreground font-medium">TTS:</span>
+              <p className="mt-1 italic text-foreground/80">{scene.tts_text}</p>
+            </div>
             {renderEditable("Image Prompt", "prompt", scene.image_prompt, true)}
           </div>
         </CardContent>

@@ -354,6 +354,57 @@ export async function generateInworldAudio(
 }
 
 // ========================
+// Groq — Regenerate image prompt
+// ========================
+
+export async function regenerateImagePrompt(
+  scriptText: string,
+  groqApiKey: string,
+  styleSummary?: any
+): Promise<string> {
+  const style = styleSummary || {
+    palette: "desaturated, muted, slightly dark, historical documentary tone",
+    lighting: "natural window light, candlelight, torchlight, overcast daylight",
+    framing: "wide establishing shots, over-the-shoulder views, close details",
+    people: "anonymous figures, obscured faces, silhouettes, backs turned",
+    mood: "tense, reflective, investigative, cinematic",
+    historicalLook: "realistic period atmosphere, grounded environments",
+  };
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${groqApiKey}`,
+    },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert at writing image generation prompts for historical documentary scenes. Given a script text and style guide, produce a single detailed cinematic image prompt. Keep people anonymous (no names/faces). End with style keywords. Return ONLY the prompt text, no JSON or markdown.`,
+        },
+        {
+          role: "user",
+          content: `Script: ${scriptText}\n\nStyle Guide:\n${JSON.stringify(style, null, 2)}\n\nGenerate one detailed image prompt.`,
+        },
+      ],
+      temperature: 0.4,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Groq error: ${response.status} - ${errText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("No content from Groq");
+  return content.trim();
+}
+
+// ========================
 // Mock fallbacks
 // ========================
 
