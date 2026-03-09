@@ -309,44 +309,15 @@ function getStyleRefUrl(projectId: string, filename: string): string {
 export async function generateWhiskImage(
   prompt: string,
   cookie: string,
-  styleImageUrls?: string[]
+  styleImageUrls?: string[],
+  projectId?: string
 ): Promise<Blob> {
-  let enhancedPrompt = prompt;
-
-  if (styleImageUrls && styleImageUrls.length > 0) {
-    try {
-      const workflowId = await createWhiskProject(cookie);
-      console.log(`[whisk] Created project: ${workflowId}`);
-      const captions: string[] = [];
-      for (const url of styleImageUrls) {
-        try {
-          const res = await fetch(url);
-          if (!res.ok) continue;
-          const blob = await res.blob();
-          const rawBytes = await blobToBase64DataUrl(blob);
-          const caption = await captionWhiskImage(rawBytes, "MEDIA_CATEGORY_STYLE", workflowId, cookie);
-          if (caption) {
-            console.log(`[whisk] Style caption: ${caption.substring(0, 80)}`);
-            captions.push(caption);
-          }
-        } catch (e: any) {
-          console.warn(`[whisk] Style ref caption failed: ${e.message}`);
-        }
-      }
-      if (captions.length > 0) {
-        enhancedPrompt = `In the visual style of: ${captions.join("; ")}. ${prompt}`;
-        console.log(`[whisk] Enhanced prompt with ${captions.length} style caption(s)`);
-      }
-    } catch (e: any) {
-      console.warn(`[whisk] Style captioning failed, using original prompt: ${e.message}`);
-    }
-  }
-
   const genResult = await whiskProxy({
     action: "generate",
     cookie,
+    projectId,
     payload: {
-      userInput: { candidatesCount: 1, prompts: [enhancedPrompt] },
+      userInput: { candidatesCount: 1, prompts: [prompt] },
       aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE",
     },
   });

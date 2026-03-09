@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import fs from "fs";
 import { Whisk } from "@rohitaryal/whisk-api";
 
 const router = Router();
@@ -7,9 +8,20 @@ function unwrapTrpc(json: any): any {
   return json?.result?.data?.json?.result || json?.result?.data?.json || json;
 }
 
+function resolveExistingPath(base: string): string | null {
+  if (!base) return null;
+  const candidates = [
+    base,
+    base.replace(/\.png$/, ".jpg"),
+    base.replace(/\.png$/, ".jpeg"),
+    base.replace(/\.png$/, ".webp"),
+  ];
+  return candidates.find(p => fs.existsSync(p)) || null;
+}
+
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { action, cookie, accessToken, payload, apiKey } = req.body;
+    const { action, cookie, payload, apiKey, projectId } = req.body;
 
     if (action === "session") {
       const r = await fetch("https://labs.google/fx/api/auth/session", { headers: { cookie } });
@@ -38,7 +50,10 @@ router.post("/", async (req: Request, res: Response) => {
             clientContext: { workflowId: payload?.workflowId || "" },
             captionInput: {
               candidatesCount: 1,
-              mediaInput: { mediaCategory: payload?.mediaCategory || "MEDIA_CATEGORY_STYLE", rawBytes: payload?.rawBytes },
+              mediaInput: {
+                mediaCategory: payload?.mediaCategory || "MEDIA_CATEGORY_STYLE",
+                rawBytes: payload?.rawBytes,
+              },
             },
           },
         }),
@@ -60,14 +75,43 @@ router.post("/", async (req: Request, res: Response) => {
         const whisk = new Whisk(cookieVal);
         const project = await whisk.newProject("Historia-" + Date.now());
 
+        let refsAdded = 0;
+
+        if (projectId) {
+          const subjectPath = resolveExistingPath(`uploads/${projectId}/style/style1.png`);
+          if (subjectPath) {
+            try {
+              await project.addSubject({ file: subjectPath });
+              refsAdded++;
+              console.log(`[whisk-proxy] Added subject ref: ${subjectPath}`);
+            } catch (e: any) {
+              console.warn(`[whisk-proxy] addSubject failed: ${e.message}`);
+            }
+          }
+
+          const stylePath = resolveExistingPath(`uploads/${projectId}/style/style2.png`);
+          if (stylePath) {
+            try {
+              await project.addStyle({ file: stylePath });
+              refsAdded++;
+              console.log(`[whisk-proxy] Added style ref: ${stylePath}`);
+            } catch (e: any) {
+              console.warn(`[whisk-proxy] addStyle failed: ${e.message}`);
+            }
+          }
+        }
+
+        console.log(`[whisk-proxy] Generating with ${refsAdded} reference(s)`);
+
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Whisk timed out")), 30000)
+          setTimeout(() => reject(new Error("Whisk timed out after 60s")), 60000)
         );
 
-        const media = await Promise.race([
-          project.generateImage({ prompt: promptText, aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE" }),
-          timeoutPromise,
-        ]) as any;
+        const genPromise = refsAdded > 0
+          ? project.generateImageWithReferences({ prompt: promptText, aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE" })
+          : project.generateImage({ prompt: promptText, aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE" });
+
+        const media = await Promise.race([genPromise, timeoutPromise]) as any;
 
         const encodedImage = media.encodedMedia;
         if (!encodedImage) return res.json({ status: 500, data: { error: "No image in Whisk response" } });

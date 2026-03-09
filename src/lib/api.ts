@@ -177,7 +177,7 @@ export async function runClientSidePipeline(
           let success = false;
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls);
+              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls, serverProjectId);
               success = true;
               break;
             } catch (e: any) { console.error(`Whisk prompt failed: ${e.message}`); }
@@ -299,7 +299,7 @@ export async function regenerateAssetFrontend(
         let lastError = "";
         for (const prompt of allPrompts) {
           try {
-            imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls);
+            imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls, projectId);
             success = true;
             break;
           } catch (e: any) {
@@ -483,7 +483,7 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
           let success = false;
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls);
+              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls, projectId);
               success = true;
               break;
             } catch (e: any) {
