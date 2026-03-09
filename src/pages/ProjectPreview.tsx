@@ -281,9 +281,9 @@ export default function ProjectPreview() {
         </div>
 
         {/* Horizontal timeline */}
-        <div className="border-t border-border bg-card px-2 py-2 overflow-hidden">
-          <div className="overflow-x-auto overflow-y-hidden pb-1" ref={timelineRef}>
-            <div className="flex gap-2 px-1" style={{ width: "max-content" }}>
+        <div className="border-t border-border bg-card px-2 pt-2 shrink-0" style={{ height: "90px" }}>
+          <div className="overflow-x-auto overflow-y-hidden h-full" ref={timelineRef}>
+            <div className="flex gap-2 px-1 items-center" style={{ width: "max-content", minHeight: "100%" }}>
               {scenes.map((s, idx) => {
                 const thumbUrl = s.image_status === "completed" ? getAssetUrl(projectId, "images", s.image_file) : null;
                 const isActive = idx === activeIndex;
