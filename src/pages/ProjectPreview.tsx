@@ -9,7 +9,6 @@ import {
   ArrowLeft, Play, Pause, SkipBack, SkipForward,
   Volume2, VolumeX, Loader2, RefreshCw, Sparkles,
   PanelRightOpen, PanelRightClose, Save, Image as ImageIcon,
-  CheckCircle2, XCircle, Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Slider } from "@/components/ui/slider";
@@ -33,11 +32,8 @@ export default function ProjectPreview() {
   const [regenPrompt, setRegenPrompt] = useState(false);
   const [regenImage, setRegenImage] = useState(false);
 
-  const [sidebarTab, setSidebarTab] = useState<"scenes" | "prompt">("scenes");
-
   const audioRef = useRef<HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const activeThumbnailRef = useRef<HTMLButtonElement>(null);
 
   const fetchData = useCallback(async () => {
     if (!projectId) return;
@@ -60,10 +56,6 @@ export default function ProjectPreview() {
   useEffect(() => {
     if (scene) setEditPrompt(scene.image_prompt);
   }, [activeIndex, scene?.image_prompt]);
-
-  useEffect(() => {
-    activeThumbnailRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [activeIndex]);
 
   // Load audio durations
   useEffect(() => {
@@ -323,121 +315,39 @@ export default function ProjectPreview() {
         </div>
       </div>
 
-      {/* Right sidebar */}
+      {/* Right sidebar — prompt editor */}
       {sidebarOpen && (
-        <div className="w-72 border-l border-border bg-card flex flex-col shrink-0">
-          {/* Tab strip */}
-          <div className="flex border-b border-border shrink-0">
-            <button
-              onClick={() => setSidebarTab("scenes")}
-              className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
-                sidebarTab === "scenes"
-                  ? "text-primary border-b-2 border-primary bg-primary/5"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Scenes
-            </button>
-            <button
-              onClick={() => setSidebarTab("prompt")}
-              className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
-                sidebarTab === "prompt"
-                  ? "text-primary border-b-2 border-primary bg-primary/5"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Prompt
-            </button>
+        <div className="w-72 border-l border-border bg-card flex flex-col shrink-0 overflow-hidden">
+          <div className="px-4 py-3 border-b border-border shrink-0">
+            <h2 className="text-sm font-display text-foreground">Image Prompt</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Scene {scene.scene_number} of {scenes.length}</p>
           </div>
-
-          {/* Scenes tab */}
-          {sidebarTab === "scenes" && (
-            <div className="flex-1 overflow-y-auto p-2">
-              <div className="grid grid-cols-2 gap-2">
-                {scenes.map((s, idx) => {
-                  const thumbUrl = s.image_status === "completed" ? getAssetUrl(projectId!, "images", s.image_file) : null;
-                  const isActive = idx === activeIndex;
-                  return (
-                    <button
-                      key={s.scene_number}
-                      ref={isActive ? activeThumbnailRef : null}
-                      onClick={() => goScene(idx)}
-                      className={`relative aspect-video rounded overflow-hidden border-2 transition-all text-left ${
-                        isActive
-                          ? "border-info ring-1 ring-info ring-offset-1 ring-offset-card"
-                          : "border-border hover:border-muted-foreground"
-                      }`}
-                    >
-                      {thumbUrl ? (
-                        <img src={thumbUrl} alt={`Scene ${s.scene_number}`} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full bg-secondary flex items-center justify-center">
-                          <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                      )}
-                      {/* Scene number + status */}
-                      <div className="absolute bottom-0 left-0 right-0 bg-background/80 px-1 py-0.5 flex items-center justify-between">
-                        <span className={`text-[10px] font-bold font-display ${isActive ? "text-info" : "text-primary"}`}>
-                          {s.scene_number}
-                        </span>
-                        <div className="flex gap-0.5">
-                          {s.image_status === "completed" ? (
-                            <CheckCircle2 className="h-2.5 w-2.5 text-success" />
-                          ) : s.image_status === "failed" ? (
-                            <XCircle className="h-2.5 w-2.5 text-destructive" />
-                          ) : (
-                            <Clock className="h-2.5 w-2.5 text-muted-foreground" />
-                          )}
-                          {s.audio_status === "completed" ? (
-                            <CheckCircle2 className="h-2.5 w-2.5 text-success" />
-                          ) : s.audio_status === "failed" ? (
-                            <XCircle className="h-2.5 w-2.5 text-destructive" />
-                          ) : (
-                            <Clock className="h-2.5 w-2.5 text-muted-foreground" />
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+            <Textarea
+              value={editPrompt}
+              onChange={(e) => setEditPrompt(e.target.value)}
+              className="text-xs font-mono bg-secondary resize-none"
+              rows={9}
+            />
+            <div className="flex flex-col gap-2">
+              <Button size="sm" onClick={savePrompt} disabled={saving} className="w-full">
+                {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+                Save Prompt
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleRegenPrompt} disabled={regenPrompt} className="w-full">
+                {regenPrompt ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Sparkles className="h-3 w-3 mr-1" />}
+                Regenerate Prompt (AI)
+              </Button>
+              <Button size="sm" variant="secondary" onClick={handleRegenImage} disabled={regenImage} className="w-full">
+                {regenImage ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                Regenerate Image
+              </Button>
             </div>
-          )}
-
-          {/* Prompt tab */}
-          {sidebarTab === "prompt" && (
-            <>
-              <div className="px-4 py-2 border-b border-border shrink-0">
-                <p className="text-xs text-muted-foreground">Scene {scene.scene_number}</p>
-              </div>
-              <div className="flex-1 overflow-auto p-4 space-y-3">
-                <Textarea
-                  value={editPrompt}
-                  onChange={(e) => setEditPrompt(e.target.value)}
-                  className="text-xs font-mono min-h-[200px] bg-secondary"
-                  rows={10}
-                />
-                <div className="flex flex-col gap-2">
-                  <Button size="sm" onClick={savePrompt} disabled={saving} className="w-full">
-                    {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Save className="h-3 w-3 mr-1" />}
-                    Save Prompt
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleRegenPrompt} disabled={regenPrompt} className="w-full">
-                    {regenPrompt ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Sparkles className="h-3 w-3 mr-1" />}
-                    Generate New Prompt (AI)
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={handleRegenImage} disabled={regenImage} className="w-full">
-                    {regenImage ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
-                    Regenerate Image
-                  </Button>
-                </div>
-              </div>
-              <div className="border-t border-border p-4 shrink-0">
-                <p className="text-xs text-muted-foreground mb-1">Script Text:</p>
-                <p className="text-xs text-foreground/80 leading-relaxed">{scene.script_text}</p>
-              </div>
-            </>
-          )}
+          </div>
+          <div className="border-t border-border p-4 shrink-0">
+            <p className="text-xs text-muted-foreground mb-1">Script Text</p>
+            <p className="text-xs text-foreground/80 leading-relaxed line-clamp-4">{scene.script_text}</p>
+          </div>
         </div>
       )}
     </div>
