@@ -311,16 +311,6 @@ export async function generateWhiskImage(
   cookie: string,
   styleImageUrls?: string[]
 ): Promise<Blob> {
-  const sessionResult = await whiskProxy({ action: "session", cookie });
-  if (sessionResult.status === 401 || sessionResult.status === 403) {
-    throw new Error("Whisk cookie expired or invalid. Go to Settings and update your Whisk Cookie (copy fresh from labs.google).");
-  }
-  if (sessionResult.status && sessionResult.status >= 400) {
-    throw new Error(`Whisk session failed (HTTP ${sessionResult.status}). Check your Whisk Cookie in Settings.`);
-  }
-  const accessToken = sessionResult?.data?.access_token;
-  if (!accessToken) throw new Error("No access_token in Whisk session — cookie may be expired. Update it in Settings.");
-
   let enhancedPrompt = prompt;
 
   if (styleImageUrls && styleImageUrls.length > 0) {
@@ -354,17 +344,15 @@ export async function generateWhiskImage(
 
   const genResult = await whiskProxy({
     action: "generate",
-    accessToken,
+    cookie,
     payload: {
-      userInput: { candidatesCount: 1, prompts: [enhancedPrompt], isExpandedPrompt: false },
-      clientContext: { tool: "IMAGE_FX" },
-      modelInput: { modelNameType: "IMAGEN_3_5" },
+      userInput: { candidatesCount: 1, prompts: [enhancedPrompt] },
       aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE",
     },
   });
 
   if (genResult.status && genResult.status >= 400) {
-    const detail = JSON.stringify(genResult.data).substring(0, 300);
+    const detail = JSON.stringify(genResult.data || genResult).substring(0, 300);
     console.error(`Whisk generate error ${genResult.status}:`, detail);
     if (genResult.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
     if (genResult.status === 401 || genResult.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie in Settings.");

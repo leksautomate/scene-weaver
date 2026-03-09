@@ -1,27 +1,18 @@
 import fs from "fs";
 import path from "path";
+import { Whisk } from "@rohitaryal/whisk-api";
 
 function unwrapTrpc(json: any): any {
   return json?.result?.data?.json?.result || json?.result?.data?.json || json;
 }
 
-async function getWhiskSession(cookie: string): Promise<string> {
-  const res = await fetch("https://labs.google/fx/api/auth/session", { headers: { cookie } });
-  if (!res.ok) throw new Error(`Whisk session failed: ${res.status}`);
-  const data = await res.json();
-  const accessToken = data?.access_token;
-  if (!accessToken) throw new Error("No access_token in Whisk session — cookie may be expired");
-  return accessToken;
-}
-
-async function captionImageFromBytes(rawBytes: string, workflowId: string, cookie: string): Promise<string> {
+async function captionImageFromBytes(rawBytes: string, cookie: string): Promise<string> {
   try {
     const res = await fetch("https://labs.google/fx/api/trpc/backbone.captionImage", {
       method: "POST",
       headers: { "Content-Type": "application/json", cookie },
       body: JSON.stringify({
         json: {
-          clientContext: { workflowId },
           captionInput: {
             candidatesCount: 1,
             mediaInput: { mediaCategory: "MEDIA_CATEGORY_STYLE", rawBytes },
@@ -36,21 +27,6 @@ async function captionImageFromBytes(rawBytes: string, workflowId: string, cooki
   } catch {
     return "";
   }
-}
-
-async function createWhiskProject(cookie: string): Promise<string> {
-  const res = await fetch("https://labs.google/fx/api/trpc/media.createOrUpdateWorkflow", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", cookie },
-    body: JSON.stringify({
-      json: { workflowMetadata: { workflowName: "Historia-" + Date.now() } },
-    }),
-  });
-  const text = await res.text();
-  const data = unwrapTrpc(JSON.parse(text));
-  const workflowId = data?.workflowId;
-  if (!workflowId) throw new Error(`No workflowId from Whisk. Response: ${text.substring(0, 200)}`);
-  return workflowId;
 }
 
 function fileToBase64DataUrl(filePath: string): string {
@@ -76,18 +52,16 @@ async function buildStyleEnhancedPrompt(
   prompt: string,
   stylePaths: string[],
   cookie: string
-): Promise<{ enhancedPrompt: string; workflowId: string | null }> {
+): Promise<string> {
   const existing = stylePaths.map(resolveExistingPath).filter(Boolean) as string[];
-  if (existing.length === 0) return { enhancedPrompt: prompt, workflowId: null };
+  if (existing.length === 0) return prompt;
 
-  let workflowId: string | null = null;
   const captions: string[] = [];
 
   try {
-    workflowId = await createWhiskProject(cookie);
     for (const p of existing) {
       const rawBytes = fileToBase64DataUrl(p);
-      const caption = await captionImageFromBytes(rawBytes, workflowId, cookie);
+      const caption = await captionImageFromBytes(rawBytes, cookie);
       if (caption) {
         console.log(`[whisk] Style caption: ${caption.substring(0, 100)}`);
         captions.push(caption);
@@ -97,48 +71,9 @@ async function buildStyleEnhancedPrompt(
     console.warn(`[whisk] Caption step failed: ${e.message}`);
   }
 
-  if (captions.length === 0) return { enhancedPrompt: prompt, workflowId };
+  if (captions.length === 0) return prompt;
 
-  const stylePrefix = `In the visual style of: ${captions.join("; ")}. `;
-  return { enhancedPrompt: stylePrefix + prompt, workflowId };
-}
-
-async function generateViaImageFx(prompt: string, accessToken: string): Promise<Uint8Array> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-
-  let res: Response;
-  try {
-    res = await fetch("https://aisandbox-pa.googleapis.com/v1:runImageFx", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      signal: controller.signal,
-      body: JSON.stringify({
-        userInput: { candidatesCount: 1, prompts: [prompt], isExpandedPrompt: false },
-        clientContext: { tool: "IMAGE_FX" },
-        modelInput: { modelNameType: "IMAGEN_3_5" },
-        aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE",
-      }),
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[whisk] ImageFx error ${res.status}: ${errText.substring(0, 500)}`);
-    if (res.status === 429) throw new Error("Whisk rate limited — wait a minute and try again.");
-    if (res.status === 401 || res.status === 403) throw new Error("Whisk auth expired. Update your Whisk Cookie.");
-    throw new Error(`Whisk generation failed (${res.status}): ${errText.substring(0, 300)}`);
-  }
-
-  const genData = await res.json();
-  const encodedImage = genData?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;
-  if (!encodedImage) {
-    console.error(`[whisk] No image in response:`, JSON.stringify(genData).substring(0, 300));
-    throw new Error("No image in Whisk response");
-  }
-  return decodeEncodedImage(encodedImage);
+  return `In the visual style of: ${captions.join("; ")}. ${prompt}`;
 }
 
 export async function generateWhiskImageWithRefs(
@@ -146,10 +81,26 @@ export async function generateWhiskImageWithRefs(
   cookie: string,
   styleImagePaths: string[]
 ): Promise<Uint8Array> {
-  const accessToken = await getWhiskSession(cookie);
-  const { enhancedPrompt } = await buildStyleEnhancedPrompt(prompt, styleImagePaths, cookie);
-  console.log(`[whisk] Generating image with prompt: ${enhancedPrompt.substring(0, 120)}...`);
-  return generateViaImageFx(enhancedPrompt, accessToken);
+  const enhancedPrompt = await buildStyleEnhancedPrompt(prompt, styleImagePaths, cookie);
+  console.log(`[whisk] Generating: ${enhancedPrompt.substring(0, 120)}...`);
+
+  const whisk = new Whisk(cookie);
+  const project = await whisk.newProject("Historia-" + Date.now());
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Whisk generation timed out after 30s")), 30000)
+  );
+
+  const media = await Promise.race([
+    project.generateImage({ prompt: enhancedPrompt, aspectRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE" }),
+    timeoutPromise,
+  ]);
+
+  const encodedImage = (media as any).encodedMedia;
+  if (!encodedImage) throw new Error("No image in Whisk response");
+
+  console.log(`[whisk] Image generated successfully`);
+  return decodeEncodedImage(encodedImage);
 }
 
 export function getStyleImagePaths(projectId: string): string[] {
