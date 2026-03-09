@@ -43,8 +43,6 @@ export default function ProjectStatus() {
   const [activeScene, setActiveScene] = useState<number | undefined>();
   const [bulkRetrying, setBulkRetrying] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
-  const [bulkGeneratingPending, setBulkGeneratingPending] = useState(false);
-  const [pendingProgress, setPendingProgress] = useState({ done: 0, total: 0 });
   const [isResuming, setIsResuming] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [clientPipelineRunning, setClientPipelineRunning] = useState(false);
@@ -145,17 +143,8 @@ export default function ProjectStatus() {
 
   const handleGeneratePending = async () => {
     if (!projectId) return;
-    setBulkGeneratingPending(true);
-    setPendingProgress({ done: 0, total: pendingImageScenes.length });
-    try {
-      await bulkGenerateImages(projectId, pendingImageScenes, (done, total) => {
-        setPendingProgress({ done, total });
-        fetchData();
-      });
-    } finally {
-      setBulkGeneratingPending(false);
-      fetchData();
-    }
+    await bulkGenerateImages(projectId);
+    fetchData();
   };
 
   const handleDelete = async () => {
@@ -362,17 +351,22 @@ export default function ProjectStatus() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h2 className="text-xl font-display text-foreground">Scenes ({scenes.length})</h2>
             <div className="flex gap-2 flex-wrap">
-              {pendingImageScenes.length > 0 && (
-                <Button variant="default" onClick={handleGeneratePending} disabled={bulkGeneratingPending || bulkRetrying} className="text-sm">
-                  {bulkGeneratingPending ? (
-                    <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Generating {pendingProgress.done}/{pendingProgress.total}</>
+              {(pendingImageScenes.length > 0 || project.status === "processing") && (
+                <Button
+                  variant="default"
+                  onClick={handleGeneratePending}
+                  disabled={project.status === "processing" || bulkRetrying}
+                  className="text-sm"
+                >
+                  {project.status === "processing" ? (
+                    <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Generating in background…</>
                   ) : (
                     <><RefreshCw className="h-4 w-4 mr-2" /> Generate All Missing Images ({pendingImageScenes.length})</>
                   )}
                 </Button>
               )}
               {failedScenes.length > 0 && (
-                <Button variant="outline" onClick={handleBulkRetry} disabled={bulkRetrying || bulkGeneratingPending} className="text-sm">
+                <Button variant="outline" onClick={handleBulkRetry} disabled={bulkRetrying || project.status === "processing"} className="text-sm">
                   {bulkRetrying ? (
                     <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Retrying {bulkProgress.done}/{bulkProgress.total}</>
                   ) : (

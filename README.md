@@ -40,6 +40,7 @@ Historia automates the production pipeline for historical documentary content:
 - **Fallback prompts** — 3 progressive fallbacks per scene if primary prompt fails
 - **Auth-aware early exit** — if Whisk returns a 401, all fallbacks are skipped immediately (no wasted retries)
 - **Bulk retry** — one-click retry for all failed assets
+- **Background image generation** — "Generate All Missing Images" runs server-side; navigate away and generation continues uninterrupted; live progress polling updates bars every 3 seconds
 
 ### Scene Preview Player
 - **Full-screen image viewer** with subtitle overlay showing script text
@@ -202,7 +203,9 @@ Your Whisk session cookie has expired. Fix:
 1. Go to [labs.google/fx/tools/whisk](https://labs.google/fx/tools/whisk) and log in
 2. Open DevTools → Application → Cookies → `labs.google`
 3. Copy all cookies and paste into **Settings → Whisk Cookie**
-4. Hit **"Test Whisk"** — if it goes green, use **"Retry All Failed"** on your project
+4. Hit **"Test Whisk"** — if it goes green, use **"Generate All Missing Images"** or **"Retry All Failed"** on your project
+
+**"Generate All Missing Images"** runs on the server — you can navigate away and it keeps generating. The progress bars on the Project Status page update every 3 seconds automatically.
 
 The Error Log page (`/errors`) shows the exact error per scene — if it says "auth expired" you need a new cookie; if it says "failed (500)" the prompt may need editing.
 
@@ -238,7 +241,7 @@ Mock mode is active. Make sure **Whisk** is selected as the image provider in Se
 │   ├── index.ts               # Express server entry point
 │   ├── db.ts                  # Drizzle ORM database connection
 │   ├── routes/
-│   │   ├── projects.ts        # Project + scene CRUD, asset pipeline
+│   │   ├── projects.ts        # Project + scene CRUD, asset pipeline, background generate-missing
 │   │   └── whisk-proxy.ts     # Whisk API proxy (cookie forwarding)
 │   └── lib/
 │       └── whisk.ts           # Whisk SDK wrapper
