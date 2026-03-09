@@ -284,7 +284,7 @@ export default function ProjectPreview() {
         {/* Horizontal timeline */}
         <div className="border-t border-border bg-card px-2 py-2">
           <ScrollArea className="w-full">
-            <div className="flex gap-2 pb-2 px-1" ref={timelineRef}>
+            <div className="flex gap-2 pb-2 px-1 w-max" ref={timelineRef}>
               {scenes.map((s, idx) => {
                 const thumbUrl = s.image_status === "completed" ? getAssetUrl(projectId, "images", s.image_file) : null;
                 const isActive = idx === activeIndex;

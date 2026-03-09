@@ -15,7 +15,7 @@ export default function Timeline({ scenes, projectId, onSelectScene, activeScene
 
   return (
     <ScrollArea className="w-full">
-      <div className="flex gap-3 pb-4 px-1">
+      <div className="flex gap-3 pb-4 px-1 w-max">
         {scenes.map((scene) => {
           const imgUrl =
             scene.image_status === "completed"
