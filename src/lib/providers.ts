@@ -219,10 +219,15 @@ function splitScriptIntoChunks(script: string, maxWords = 800): string[] {
   return chunks.length > 0 ? chunks : [script];
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function callGroqForScenes(
   systemPrompt: string,
   userPrompt: string,
-  groqApiKey: string
+  groqApiKey: string,
+  retryOnRateLimit = true
 ): Promise<SceneManifest[]> {
   const result = await whiskProxy({
     action: "groq-chat",
@@ -242,7 +247,14 @@ async function callGroqForScenes(
     const errText = typeof result.data === "string"
       ? result.data
       : JSON.stringify(result.data || {}).substring(0, 500);
-    if (result.status === 429) throw new Error("Groq rate limited — wait a moment and try again.");
+    if (result.status === 429) {
+      if (retryOnRateLimit) {
+        console.log("[groq] Rate limited — waiting 15s before retry...");
+        await delay(15000);
+        return callGroqForScenes(systemPrompt, userPrompt, groqApiKey, false);
+      }
+      throw new Error("Groq rate limited — try again in a moment, or reduce script length.");
+    }
     if (result.status === 401) throw new Error("Groq API key is invalid. Update it in Settings.");
     throw new Error(`Groq API error (HTTP ${result.status}): ${errText.substring(0, 200)}`);
   }
@@ -280,6 +292,8 @@ export async function generateSceneManifest(
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
+    if (i > 0) await delay(3000);
+
     const systemPrompt = baseSystemPrompt + `\n\nIMPORTANT: Start scene_number from ${nextSceneNumber}. Do not start from 1 again.`;
     const userPrompt = `Video Title: ${title}\n\nThis is chunk ${i + 1} of ${chunks.length} of the full script. Generate scenes only for this portion.\n\nScript Chunk:\n${chunk}\n\nGenerate the scene manifest now. Return ONLY the JSON object.`;
 
