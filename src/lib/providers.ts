@@ -159,12 +159,19 @@ export interface SceneManifest {
   audio_file: string;
 }
 
+function extractSentences(text: string): string[] {
+  if (!text) return [];
+  const matches = text.match(/[^.!?\n]+(?:[.!?]+["')\]]*)?|\n+/g) || [];
+  const sentences = matches.map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+  return sentences.length > 0 ? sentences : [text];
+}
+
 /** Split script into scenes — 3 sentences per scene (smart) or 1 sentence (exact) */
 export function splitScriptIntoScenes(
   script: string,
   sentencesPerScene: number = 3
 ): Array<{ scene_number: number; script_text: string }> {
-  const sentences = script.match(/[^.!?]+[.!?]+[\s\n]*|[^.!?]+$/g) || [script];
+  const sentences = extractSentences(script);
   const scenes: Array<{ scene_number: number; script_text: string }> = [];
   let sceneNum = 1;
 
@@ -184,7 +191,7 @@ export function splitScriptByDuration(
   const targetWords = sceneDuration * WORDS_PER_SECOND;
   const maxWords = Math.max(targetWords * 1.5, targetWords + 20);
 
-  const sentences = script.match(/[^.!?]+[.!?]+[\s\n]*|[^.!?]+$/g) || [script];
+  const sentences = extractSentences(script);
   const scenes: Array<{ scene_number: number; script_text: string }> = [];
   let sceneNum = 1;
   let currentSentences: string[] = [];
@@ -215,7 +222,7 @@ export function splitScriptByDuration(
 
 /** Legacy chunk splitter — kept for backward compatibility */
 export function splitScriptIntoChunks(script: string, maxWords = 800): string[] {
-  const sentences = script.match(/[^.!?]+[.!?]+[\s\n]*|[^.!?]+$/g) || [script];
+  const sentences = extractSentences(script);
   const chunks: string[] = [];
   let current = "";
   let wordCount = 0;
