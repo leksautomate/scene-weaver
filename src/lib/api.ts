@@ -525,14 +525,19 @@ export async function stopProject(projectId: string): Promise<void> {
   await apiRequest(`/projects/${projectId}/stop`, { method: "PATCH" });
 }
 
-export async function startRender(projectId: string): Promise<{ total: number }> {
-  return apiRequest(`/render/${projectId}`, { method: "POST" });
+export async function startRender(projectId: string, resolution: "480p" | "720p"): Promise<{ total: number; resolution: string }> {
+  return apiRequest(`/render/${projectId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resolution }),
+  });
 }
 
 export async function getRenderStatus(projectId: string): Promise<{
   status: "idle" | "rendering" | "done" | "failed";
   progress: number;
   total: number;
+  resolution?: string;
   error?: string;
 }> {
   return apiRequest(`/render/${projectId}/status`);

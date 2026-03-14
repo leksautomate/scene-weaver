@@ -38,6 +38,7 @@ export default function ProjectPreview() {
   const [renderStatus, setRenderStatus] = useState<"idle" | "rendering" | "done" | "failed">("idle");
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderTotal, setRenderTotal] = useState(0);
+  const [renderResolution, setRenderResolution] = useState<"480p" | "720p">("720p");
   const [renderError, setRenderError] = useState<string | null>(null);
   const renderPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -59,6 +60,24 @@ export default function ProjectPreview() {
   }, [projectId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Restore render state on mount (survives navigation away and back)
+  useEffect(() => {
+    if (!projectId) return;
+    getRenderStatus(projectId).then(s => {
+      if (s.status === "rendering") {
+        setRenderStatus("rendering");
+        setRenderProgress(s.progress ?? 0);
+        setRenderTotal(s.total ?? 0);
+        startPolling(projectId);
+      } else if (s.status === "done") {
+        setRenderStatus("done");
+        setRenderProgress(100);
+      }
+    }).catch(() => {});
+    return () => { if (renderPollRef.current) clearInterval(renderPollRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   useEffect(() => {
     if (projectStatus !== "processing") return;
@@ -225,32 +244,37 @@ export default function ProjectPreview() {
     }
   };
 
+  const startPolling = (pid: string) => {
+    if (renderPollRef.current) clearInterval(renderPollRef.current);
+    renderPollRef.current = setInterval(async () => {
+      try {
+        const s = await getRenderStatus(pid);
+        setRenderProgress(s.progress ?? 0);
+        if (s.total) setRenderTotal(s.total);
+        if (s.status === "done") {
+          setRenderStatus("done");
+          clearInterval(renderPollRef.current!);
+          toast.success("Video rendered! Ready to download.");
+        } else if (s.status === "failed") {
+          setRenderStatus("failed");
+          setRenderError(s.error ?? "Unknown error");
+          clearInterval(renderPollRef.current!);
+          toast.error(`Render failed: ${s.error}`);
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+  };
+
   const handleRender = async () => {
     if (!projectId) return;
     setRenderError(null);
     setRenderStatus("rendering");
     setRenderProgress(0);
     try {
-      const { total } = await startRender(projectId);
+      const { total } = await startRender(projectId, renderResolution);
       setRenderTotal(total);
-      toast.success(`Rendering ${total} scenes…`);
-      renderPollRef.current = setInterval(async () => {
-        try {
-          const s = await getRenderStatus(projectId);
-          setRenderProgress(s.progress ?? 0);
-          setRenderTotal(s.total ?? total);
-          if (s.status === "done") {
-            setRenderStatus("done");
-            clearInterval(renderPollRef.current!);
-            toast.success("Video rendered! Ready to download.");
-          } else if (s.status === "failed") {
-            setRenderStatus("failed");
-            setRenderError(s.error ?? "Unknown error");
-            clearInterval(renderPollRef.current!);
-            toast.error(`Render failed: ${s.error}`);
-          }
-        } catch { /* keep polling */ }
-      }, 2000);
+      toast.success(`Rendering ${total} scenes at ${renderResolution} in background…`);
+      startPolling(projectId);
     } catch (e: any) {
       setRenderStatus("failed");
       setRenderError(e.message);
@@ -300,11 +324,24 @@ export default function ProjectPreview() {
               </Button>
             )}
 
-            {/* Render button */}
+            {/* Resolution picker + Render button */}
             {renderStatus === "idle" && (
-              <Button size="sm" variant="default" onClick={handleRender}>
-                <Film className="h-3 w-3 mr-1" />Render Video
-              </Button>
+              <div className="flex items-center gap-1">
+                <div className="flex rounded-md border border-border overflow-hidden text-xs">
+                  {(["480p", "720p"] as const).map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setRenderResolution(r)}
+                      className={`px-2 py-1 transition-colors ${renderResolution === r ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+                <Button size="sm" variant="default" onClick={handleRender}>
+                  <Film className="h-3 w-3 mr-1" />Render Video
+                </Button>
+              </div>
             )}
             {renderStatus === "rendering" && (
               <Button size="sm" variant="default" disabled>

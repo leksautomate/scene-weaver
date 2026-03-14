@@ -18,40 +18,47 @@ function pickEffect(prev?: KBEffect): KBEffect {
 }
 
 /**
- * Build the zoompan filter string for a given effect and duration.
- * Input is first upscaled to 8000px wide so panning/zooming has plenty of
- * pixel data — then zoompan crops+scales to 1920x1080.
+ * Build the zoompan filter string for a given effect, duration and output size.
+ * Input is first upscaled so panning/zooming has plenty of pixel data,
+ * then zoompan crops+scales to the requested resolution.
  */
-function buildZoompan(effect: KBEffect, frames: number): string {
-  const PAN_FRAC = 0.23077; // (1 - 1/1.3) — fraction of input that is pannable at z=1.3
-  const spd_h = (PAN_FRAC / frames).toFixed(6); // horizontal speed as fraction of iw/frame
-  const spd_v = (PAN_FRAC / frames).toFixed(6); // vertical speed as fraction of ih/frame
+function buildZoompan(effect: KBEffect, frames: number, width: number, height: number): string {
+  const PAN_FRAC = 0.23077; // (1 - 1/1.3) — fraction of input pannable at z=1.3
+  const spd_h = (PAN_FRAC / frames).toFixed(6);
+  const spd_v = (PAN_FRAC / frames).toFixed(6);
+  const size = `${width}x${height}`;
 
   switch (effect) {
     case "zoom-in": {
       const inc = (0.5 / frames).toFixed(6);
-      return `scale=8000:-1,zoompan=z='min(pzoom+${inc},1.5)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080`;
+      return `scale=8000:-1,zoompan=z='min(pzoom+${inc},1.5)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${size}`;
     }
     case "zoom-out": {
       const dec = (0.5 / frames).toFixed(6);
-      return `scale=8000:-1,zoompan=z='if(eq(on,1),1.5,max(pzoom-${dec},1.0))':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080`;
+      return `scale=8000:-1,zoompan=z='if(eq(on,1),1.5,max(pzoom-${dec},1.0))':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${size}`;
     }
     case "pan-right":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='min(px+iw*${spd_h},iw*(1-1/zoom))':y='ih/2-(ih/zoom/2)':s=1920x1080`;
+      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='min(px+iw*${spd_h},iw*(1-1/zoom))':y='ih/2-(ih/zoom/2)':s=${size}`;
     case "pan-left":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='if(eq(on,1),iw*(1-1/zoom),max(px-iw*${spd_h},0))':y='ih/2-(ih/zoom/2)':s=1920x1080`;
+      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='if(eq(on,1),iw*(1-1/zoom),max(px-iw*${spd_h},0))':y='ih/2-(ih/zoom/2)':s=${size}`;
     case "pan-up":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='if(eq(on,1),ih*(1-1/zoom),max(py-ih*${spd_v},0))':s=1920x1080`;
+      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='if(eq(on,1),ih*(1-1/zoom),max(py-ih*${spd_v},0))':s=${size}`;
     case "pan-down":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='min(py+ih*${spd_v},ih*(1-1/zoom))':s=1920x1080`;
+      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='min(py+ih*${spd_v},ih*(1-1/zoom))':s=${size}`;
   }
 }
+
+const RESOLUTIONS: Record<string, [number, number]> = {
+  "480p": [854, 480],
+  "720p": [1280, 720],
+};
 
 // ── In-memory job store ────────────────────────────────────────────────────
 type RenderJob = {
   status: "rendering" | "done" | "failed";
   progress: number; // 0–100
   total: number;
+  resolution: string;
   error?: string;
 };
 const jobs: Record<string, RenderJob> = {};
@@ -76,10 +83,13 @@ router.post("/:id", async (req: Request, res: Response) => {
     if (ready.length === 0)
       return res.status(400).json({ error: "No scenes are fully ready (need completed image AND audio for each scene)." });
 
-    jobs[projectId] = { status: "rendering", progress: 0, total: ready.length };
-    res.json({ success: true, total: ready.length });
+    const resKey = req.body?.resolution === "480p" ? "480p" : "720p";
+    const [W, H] = RESOLUTIONS[resKey];
 
-    renderVideo(projectId, ready).catch(e => {
+    jobs[projectId] = { status: "rendering", progress: 0, total: ready.length, resolution: resKey };
+    res.json({ success: true, total: ready.length, resolution: resKey });
+
+    renderVideo(projectId, ready, W, H).catch(e => {
       console.error(`[render] ${projectId} failed:`, e.message);
       jobs[projectId] = { ...jobs[projectId], status: "failed", error: e.message };
     });
@@ -90,7 +100,12 @@ router.post("/:id", async (req: Request, res: Response) => {
 
 /** GET /api/render/:id/status */
 router.get("/:id/status", (req: Request, res: Response) => {
-  res.json(jobs[req.params.id] ?? { status: "idle" });
+  const job = jobs[req.params.id];
+  if (job) return res.json(job);
+  // If server restarted but output exists, report done
+  const outPath = path.join("uploads", req.params.id, "render", "output.mp4");
+  if (fs.existsSync(outPath)) return res.json({ status: "done", progress: 100, total: 0, resolution: "unknown" });
+  res.json({ status: "idle" });
 });
 
 /** GET /api/render/:id/download */
@@ -136,7 +151,7 @@ function findImageFile(projectId: string, sceneNumber: number, dbFile?: string |
 
 // ── Core render function ───────────────────────────────────────────────────
 
-async function renderVideo(projectId: string, sceneList: any[]) {
+async function renderVideo(projectId: string, sceneList: any[], width: number, height: number) {
   const FPS = 25;
   const T = 0.5;  // transition duration in seconds
   const dir = path.join("uploads", projectId, "render");
@@ -166,7 +181,7 @@ async function renderVideo(projectId: string, sceneList: any[]) {
     const effect = pickEffect(prevEffect);
     prevEffect = effect;
 
-    const zp = buildZoompan(effect, frames);
+    const zp = buildZoompan(effect, frames, width, height);
     const clip = path.join(dir, `clip_${i}.mp4`);
 
     /**
