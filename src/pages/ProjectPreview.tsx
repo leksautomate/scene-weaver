@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { getProject, getAssetUrl, regenerateAssetFrontend, bulkRegeneratePending, startRender, getRenderStatus, getRenderDownloadUrl } from "@/lib/api";
+import { getProject, getAssetUrl, regenerateAssetFrontend, bulkRegeneratePending, startClipGeneration, getClipStatus, getClipsZipUrl, startRender, getRenderStatus, getRenderDownloadUrl } from "@/lib/api";
 import { regenerateImagePrompt } from "@/lib/providers";
 import type { Scene } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import {
   ArrowLeft, Play, Pause, SkipBack, SkipForward,
   Volume2, VolumeX, Loader2, RefreshCw, Sparkles,
   PanelRightOpen, PanelRightClose, Save, Image as ImageIcon,
-  Film, Download, CheckCircle2, AlertTriangle,
+  Film, Download, CheckCircle2, AlertTriangle, FolderDown, Merge,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Slider } from "@/components/ui/slider";
@@ -35,6 +35,13 @@ export default function ProjectPreview() {
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
   const [projectStatus, setProjectStatus] = useState("");
+  const [clipStatus, setClipStatus] = useState<"idle" | "generating" | "done" | "failed">("idle");
+  const [clipProgress, setClipProgress] = useState(0);
+  const [clipDone, setClipDone] = useState(0);
+  const [clipTotal, setClipTotal] = useState(0);
+  const [clipError, setClipError] = useState<string | null>(null);
+  const clipPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [renderStatus, setRenderStatus] = useState<"idle" | "rendering" | "done" | "failed">("idle");
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderTotal, setRenderTotal] = useState(0);
@@ -60,6 +67,27 @@ export default function ProjectPreview() {
   }, [projectId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Restore clip state on mount
+  useEffect(() => {
+    if (!projectId) return;
+    getClipStatus(projectId).then(s => {
+      if (s.status === "generating") {
+        setClipStatus("generating");
+        setClipProgress(s.progress ?? 0);
+        setClipDone(s.done ?? 0);
+        setClipTotal(s.total ?? 0);
+        startClipPolling(projectId);
+      } else if (s.status === "done") {
+        setClipStatus("done");
+        setClipProgress(100);
+        setClipDone(s.done ?? s.total ?? 0);
+        setClipTotal(s.total ?? 0);
+      }
+    }).catch(() => {});
+    return () => { if (clipPollRef.current) clearInterval(clipPollRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   // Restore render state on mount (survives navigation away and back)
   useEffect(() => {
@@ -244,6 +272,46 @@ export default function ProjectPreview() {
     }
   };
 
+  const startClipPolling = (pid: string) => {
+    if (clipPollRef.current) clearInterval(clipPollRef.current);
+    clipPollRef.current = setInterval(async () => {
+      try {
+        const s = await getClipStatus(pid);
+        setClipProgress(s.progress ?? 0);
+        if (s.done !== undefined) setClipDone(s.done);
+        if (s.total) setClipTotal(s.total);
+        if (s.status === "done") {
+          setClipStatus("done");
+          clearInterval(clipPollRef.current!);
+          toast.success(`${s.total ?? s.done} clips ready! Download as ZIP or merge into one video.`);
+        } else if (s.status === "failed") {
+          setClipStatus("failed");
+          setClipError(s.error ?? "Unknown error");
+          clearInterval(clipPollRef.current!);
+          toast.error(`Clip generation failed: ${s.error}`);
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+  };
+
+  const handleGenerateClips = async () => {
+    if (!projectId) return;
+    setClipError(null);
+    setClipStatus("generating");
+    setClipProgress(0);
+    try {
+      const { total } = await startClipGeneration(projectId, renderResolution);
+      setClipTotal(total);
+      setClipDone(0);
+      toast.success(`Generating ${total} clips at ${renderResolution}…`);
+      startClipPolling(projectId);
+    } catch (e: any) {
+      setClipStatus("failed");
+      setClipError(e.message);
+      toast.error(e.message);
+    }
+  };
+
   const startPolling = (pid: string) => {
     if (renderPollRef.current) clearInterval(renderPollRef.current);
     renderPollRef.current = setInterval(async () => {
@@ -324,48 +392,84 @@ export default function ProjectPreview() {
               </Button>
             )}
 
-            {/* Resolution picker + Render button */}
-            {renderStatus === "idle" && (
+            {/* Resolution picker */}
+            <div className="flex rounded-md border border-border overflow-hidden text-xs">
+              {(["480p", "720p"] as const).map(r => (
+                <button
+                  key={r}
+                  onClick={() => setRenderResolution(r)}
+                  className={`px-2 py-1 transition-colors ${renderResolution === r ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:text-foreground"}`}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+
+            {/* Phase 1: Generate Clips */}
+            {clipStatus === "idle" && (
+              <Button size="sm" variant="default" onClick={handleGenerateClips}>
+                <Film className="h-3 w-3 mr-1" />Generate Clips
+              </Button>
+            )}
+            {clipStatus === "generating" && (
+              <Button size="sm" variant="default" disabled>
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                Generating {clipDone}/{clipTotal} clips ({clipProgress}%)
+              </Button>
+            )}
+            {clipStatus === "failed" && (
               <div className="flex items-center gap-1">
-                <div className="flex rounded-md border border-border overflow-hidden text-xs">
-                  {(["480p", "720p"] as const).map(r => (
-                    <button
-                      key={r}
-                      onClick={() => setRenderResolution(r)}
-                      className={`px-2 py-1 transition-colors ${renderResolution === r ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {r}
-                    </button>
-                  ))}
-                </div>
+                <AlertTriangle className="h-3 w-3 text-destructive" title={clipError ?? ""} />
+                <Button size="sm" variant="outline" onClick={() => setClipStatus("idle")}>Retry Clips</Button>
+              </div>
+            )}
+
+            {/* Phase 2: after clips are done — Download ZIP or Merge */}
+            {clipStatus === "done" && projectId && renderStatus === "idle" && (
+              <div className="flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3 text-success" />
+                <a href={getClipsZipUrl(projectId)} download="clips.zip">
+                  <Button size="sm" variant="outline">
+                    <FolderDown className="h-3 w-3 mr-1" />Download ZIP
+                  </Button>
+                </a>
                 <Button size="sm" variant="default" onClick={handleRender}>
-                  <Film className="h-3 w-3 mr-1" />Render Video
+                  <Merge className="h-3 w-3 mr-1" />Merge Videos
                 </Button>
               </div>
             )}
+
+            {/* Merge in progress */}
             {renderStatus === "rendering" && (
               <Button size="sm" variant="default" disabled>
                 <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                Rendering {renderProgress}% ({renderProgress > 0 ? Math.round(renderProgress / 100 * renderTotal) : 0}/{renderTotal})
+                Merging {renderProgress}%
               </Button>
             )}
+
+            {/* Merge done */}
             {renderStatus === "done" && projectId && (
               <div className="flex items-center gap-1">
                 <CheckCircle2 className="h-3 w-3 text-success" />
+                <a href={getClipsZipUrl(projectId)} download="clips.zip">
+                  <Button size="sm" variant="outline">
+                    <FolderDown className="h-3 w-3 mr-1" />ZIP
+                  </Button>
+                </a>
                 <a href={getRenderDownloadUrl(projectId)} download>
                   <Button size="sm" variant="default">
                     <Download className="h-3 w-3 mr-1" />Download MP4
                   </Button>
                 </a>
-                <Button size="sm" variant="ghost" onClick={() => setRenderStatus("idle")}>Re-render</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setRenderStatus("idle"); setClipStatus("idle"); }}>Re-do</Button>
               </div>
             )}
+
+            {/* Merge failed */}
             {renderStatus === "failed" && (
               <div className="flex items-center gap-1">
                 <AlertTriangle className="h-3 w-3 text-destructive" title={renderError ?? ""} />
-                <Button size="sm" variant="outline" onClick={() => setRenderStatus("idle")}>
-                  Retry Render
-                </Button>
+                <Button size="sm" variant="outline" onClick={() => setRenderStatus("idle")}>Retry Merge</Button>
               </div>
             )}
 
