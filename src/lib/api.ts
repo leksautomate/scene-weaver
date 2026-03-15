@@ -101,14 +101,15 @@ async function processRemainingChunks(
   startSceneNumber: number,
   projectId: string,
   groqApiKey: string,
-  splitMode: "smart" | "exact" | "duration"
+  splitMode: "smart" | "exact" | "duration",
+  stylePrompt?: string
 ): Promise<void> {
   let nextSceneNumber = startSceneNumber;
   for (let i = chunkStartIdx; i < totalChunks; i++) {
     await new Promise(r => setTimeout(r, 3000));
     try {
       console.log(`[progressive] Processing chunk ${i + 1} of ${totalChunks}...`);
-      const chunkScenes = await generateScenesForChunk(title, chunks[i], i, totalChunks, nextSceneNumber, groqApiKey, splitMode);
+      const chunkScenes = await generateScenesForChunk(title, chunks[i], i, totalChunks, nextSceneNumber, groqApiKey, splitMode, stylePrompt);
       await appendScenesToProject(projectId, chunkScenes);
       nextSceneNumber += chunkScenes.length;
       console.log(`[progressive] Chunk ${i + 1} appended: ${chunkScenes.length} scenes`);
@@ -123,7 +124,7 @@ export async function createProjectFrontend(
   script: string,
   style1: File | null,
   style2: File | null,
-  options: { voiceId?: string; splitMode?: "smart" | "exact" | "duration" },
+  options: { voiceId?: string; splitMode?: "smart" | "exact" | "duration"; stylePrompt?: string },
   callbacks: PipelineCallbacks
 ): Promise<{ projectId: string; serverPipeline: boolean; sceneCount: number }> {
   const settings = loadProviderSettings();
@@ -139,7 +140,7 @@ export async function createProjectFrontend(
 
   let firstChunkScenes: SceneManifest[];
   try {
-    firstChunkScenes = await generateScenesForChunk(title, chunks[0], 0, totalChunks, 1, settings.groqApiKey, options.splitMode || "smart");
+    firstChunkScenes = await generateScenesForChunk(title, chunks[0], 0, totalChunks, 1, settings.groqApiKey, options.splitMode || "smart", options.stylePrompt);
   } catch (e: any) {
     throw new Error(`Scene generation failed: ${e.message}`);
   }
@@ -154,6 +155,7 @@ export async function createProjectFrontend(
   formData.append("voiceId", options.voiceId || settings.voiceId);
   formData.append("modelId", settings.modelId);
   formData.append("splitMode", options.splitMode || "smart");
+  if (options.stylePrompt) formData.append("stylePrompt", options.stylePrompt);
   if (style1) formData.append("style1", style1);
   if (style2) formData.append("style2", style2);
 
@@ -176,7 +178,7 @@ export async function createProjectFrontend(
 
   if (totalChunks > 1) {
     const nextSceneNumber = firstChunkScenes.length + 1;
-    processRemainingChunks(title, chunks, 1, totalChunks, nextSceneNumber, serverProjectId, settings.groqApiKey, options.splitMode || "smart")
+    processRemainingChunks(title, chunks, 1, totalChunks, nextSceneNumber, serverProjectId, settings.groqApiKey, options.splitMode || "smart", options.stylePrompt)
       .catch(e => console.error("[progressive] background processing error:", e.message));
   }
 
@@ -197,7 +199,10 @@ export async function runClientSidePipeline(
   let audioCompleted = scenes.filter((s: any) => s.audio_status === "completed").length;
   let imagesFailed = 0, audioFailed = 0;
 
-  const styleUrls = [
+  const { project: projectData } = await fetch(`${API_BASE}/projects/${serverProjectId}`).then(r => r.json());
+  const projectStylePrompt: string | undefined = (projectData?.settings as any)?.stylePrompt;
+
+  const styleUrls = projectStylePrompt ? [] : [
     getAssetUrl(serverProjectId, "style", "style1.png"),
     getAssetUrl(serverProjectId, "style", "style2.png"),
   ];
@@ -220,12 +225,19 @@ export async function runClientSidePipeline(
         let imageBlob: Blob;
         if (settings.imageProvider === "whisk") {
           if (!settings.whiskCookie) throw new Error("Whisk cookie not configured. Add it in Settings.");
-          const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts || [])];
+          const rawPrompts = [scene.image_prompt, ...(scene.fallback_prompts || [])];
+          const allPrompts = projectStylePrompt
+            ? rawPrompts.map(p => `${p}, ${projectStylePrompt}`)
+            : rawPrompts;
           let success = false;
           let lastWhiskError = "All Whisk prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls, serverProjectId);
+              imageBlob = await generateWhiskImage(
+                prompt, settings.whiskCookie,
+                styleUrls.length ? styleUrls : undefined,
+                styleUrls.length ? serverProjectId : undefined
+              );
               success = true;
               break;
             } catch (e: any) {
@@ -344,12 +356,13 @@ export async function regenerateAssetFrontend(
 ): Promise<void> {
   const settings = loadProviderSettings();
 
-  const { scenes } = await getProject(projectId);
+  const { project: regenProject, scenes } = await getProject(projectId);
   const scene = scenes.find(s => s.scene_number === sceneNumber);
   if (!scene) throw new Error("Scene not found");
+  const regenStylePrompt: string | undefined = (regenProject?.settings as any)?.stylePrompt;
 
   if (type === "image") {
-    const styleUrls = [
+    const styleUrls = regenStylePrompt ? [] : [
       getAssetUrl(projectId, "style", "style1.png"),
       getAssetUrl(projectId, "style", "style2.png"),
     ];
@@ -357,12 +370,19 @@ export async function regenerateAssetFrontend(
     try {
       let imageBlob: Blob;
       if (settings.imageProvider === "whisk" && settings.whiskCookie) {
-        const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+        const rawPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+        const allPrompts = regenStylePrompt
+          ? rawPrompts.map(p => `${p}, ${regenStylePrompt}`)
+          : rawPrompts;
         let success = false;
         let lastError = "";
         for (const prompt of allPrompts) {
           try {
-            imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls, projectId);
+            imageBlob = await generateWhiskImage(
+              prompt, settings.whiskCookie,
+              styleUrls.length ? styleUrls : undefined,
+              styleUrls.length ? projectId : undefined
+            );
             success = true;
             break;
           } catch (e: any) {
@@ -578,7 +598,7 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
     body: JSON.stringify({ status: "processing" }),
   });
 
-  const { scenes: allScenes } = await getProject(projectId);
+  const { project: resumeProjectData, scenes: allScenes } = await getProject(projectId);
   const pendingScenes = allScenes.filter(s =>
     s.image_status !== "completed" || s.audio_status !== "completed"
   );
@@ -593,7 +613,8 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
   }
 
   callbacks.onPhase(`Resuming ${pendingScenes.length} scenes...`);
-  const styleUrls = [
+  const resumeStylePrompt: string | undefined = (resumeProjectData?.settings as any)?.stylePrompt;
+  const styleUrls = resumeStylePrompt ? [] : [
     getAssetUrl(projectId, "style", "style1.png"),
     getAssetUrl(projectId, "style", "style2.png"),
   ];
@@ -612,12 +633,19 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
       try {
         let imageBlob: Blob;
         if (settings.imageProvider === "whisk" && settings.whiskCookie) {
-          const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+          const rawPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+          const allPrompts = resumeStylePrompt
+            ? rawPrompts.map(p => `${p}, ${resumeStylePrompt}`)
+            : rawPrompts;
           let success = false;
           let lastWhiskError = "All Whisk prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateWhiskImage(prompt, settings.whiskCookie, styleUrls, projectId);
+              imageBlob = await generateWhiskImage(
+                prompt, settings.whiskCookie,
+                styleUrls.length ? styleUrls : undefined,
+                styleUrls.length ? projectId : undefined
+              );
               success = true;
               break;
             } catch (e: any) {

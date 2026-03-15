@@ -66,7 +66,7 @@ router.get("/:id", async (req: Request, res: Response) => {
 
 router.post("/", upload.fields([{ name: "style1", maxCount: 1 }, { name: "style2", maxCount: 1 }]), async (req: Request, res: Response) => {
   try {
-    const { title, script, imageProvider, ttsProvider, voiceId, modelId, splitMode } = req.body;
+    const { title, script, imageProvider, ttsProvider, voiceId, modelId, splitMode, stylePrompt } = req.body;
     if (!title || !script) return res.status(400).json({ error: "Title and script are required" });
 
     const projectId = generateProjectId();
@@ -98,6 +98,7 @@ router.post("/", upload.fields([{ name: "style1", maxCount: 1 }, { name: "style2
         audioConcurrency: 2,
         historyMode: true,
         splitMode: splitMode || "smart",
+        ...(stylePrompt ? { stylePrompt } : {}),
       },
       style_summary: DEFAULT_STYLE_SUMMARY,
       stats: { sceneCount: 0, imagesCompleted: 0, audioCompleted: 0, imagesFailed: 0, audioFailed: 0, needsReviewCount: 0 },
@@ -238,15 +239,18 @@ async function runAssetPipeline(projectId: string) {
       return false;
     };
 
+    const stylePrompt: string | undefined = settings.stylePrompt;
+
     // Create Whisk project once and reuse for all scenes (avoids N×3 redundant setup API calls)
     let whiskProject: any = null;
     let whiskRefsAdded = 0;
     if (imageProvider === "whisk") {
       const cookie = process.env.WHISK_COOKIE;
       if (!cookie) throw new Error("WHISK_COOKIE not set in environment");
-      const stylePaths = getStyleImagePaths(projectId);
+      // Style-prompt mode skips image refs entirely; just create a bare project
+      const stylePaths = stylePrompt ? [] : getStyleImagePaths(projectId);
       ({ project: whiskProject, refsAdded: whiskRefsAdded } = await createWhiskProject(cookie, stylePaths));
-      console.log(`${projectId}: Whisk project created, reusing for all ${sceneList.length} scenes`);
+      console.log(`${projectId}: Whisk project created, reusing for all ${sceneList.length} scenes${stylePrompt ? " (style-prompt mode)" : ""}`);
     }
 
     // Phase 1: Generate images — 3 at a time
@@ -261,7 +265,10 @@ async function runAssetPipeline(projectId: string) {
         const num = scene.scene_number;
         try {
           if (imageProvider === "whisk") {
-            const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])].filter(Boolean);
+            const rawPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])].filter(Boolean);
+            const allPrompts = stylePrompt
+              ? rawPrompts.map((p: string) => `${p}, ${stylePrompt}`)
+              : rawPrompts;
             let bytes: Uint8Array | null = null;
             let lastWhiskError = "All Whisk prompts failed";
             for (const prompt of allPrompts) {
@@ -422,15 +429,17 @@ async function runMissingImageGeneration(projectId: string) {
     const imgDir = path.join("uploads", projectId, "images");
     fs.mkdirSync(imgDir, { recursive: true });
 
+    const missingStylePrompt: string | undefined = settings.stylePrompt;
+
     // Create Whisk project once and reuse across all missing scenes (avoids N redundant setup calls)
     let whiskProject: any = null;
     let whiskRefsAdded = 0;
     if (imageProvider === "whisk") {
       const cookie = process.env.WHISK_COOKIE;
       if (!cookie) throw new Error("WHISK_COOKIE not set in environment");
-      const stylePaths = getStyleImagePaths(projectId);
+      const stylePaths = missingStylePrompt ? [] : getStyleImagePaths(projectId);
       ({ project: whiskProject, refsAdded: whiskRefsAdded } = await createWhiskProject(cookie, stylePaths));
-      console.log(`${projectId}: generate-missing Whisk project created, reusing for ${targets.length} scene(s)`);
+      console.log(`${projectId}: generate-missing Whisk project created, reusing for ${targets.length} scene(s)${missingStylePrompt ? " (style-prompt mode)" : ""}`);
     }
 
     let stopped = false;
@@ -449,7 +458,10 @@ async function runMissingImageGeneration(projectId: string) {
         const num = scene.scene_number;
         try {
           if (imageProvider === "whisk") {
-            const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])].filter(Boolean);
+            const rawPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])].filter(Boolean);
+            const allPrompts = missingStylePrompt
+              ? rawPrompts.map((p: string) => `${p}, ${missingStylePrompt}`)
+              : rawPrompts;
             let bytes: Uint8Array | null = null;
             let lastError = "All Whisk prompts failed";
             for (const prompt of allPrompts) {

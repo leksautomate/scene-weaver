@@ -86,6 +86,51 @@ export function saveProviderSettings(settings: ProviderSettings) {
 // Groq — Scene manifest generation
 // ========================
 
+// ── Style-prompt mode constants ────────────────────────────────────────────
+
+export const COMPACT_STYLE_SUFFIX =
+  `in a high-end historical epic documentary style, 19th-century academic military realism, cinematic oil painting, thick impasto brushstrokes, visible canvas texture, muted earth tones, dramatic chiaroscuro lighting, smoky atmosphere, historical accuracy, aged parchment cartography, vintage textured infographics, hand-inked military schematics, premium documentary look, desaturated palette, immersive cinematic composition, 16:9, highly detailed`;
+
+/** System prompt used when project has a stylePrompt — Groq generates ONLY the [Subject] part. */
+const STYLE_PROMPT_BATCH_IMAGE_PROMPT = `You are a visual content director for a historical epic documentary.
+
+For each numbered scene below, generate ONE short subject description and THREE fallback descriptions.
+
+PURPOSE: These will be combined with a style suffix later. Generate ONLY the [Subject] part.
+Do NOT include any style, mood, aesthetic, or quality words — those are added automatically.
+
+SUBJECT DESCRIPTION RULES:
+- Describe: WHO or WHAT is present, WHAT action is happening, WHERE it takes place, and one camera framing
+- One concise phrase or short sentence (10–20 words)
+- Use the correct scene type:
+  * Battle/action: "Russian infantry advancing through artillery smoke toward a trench line, ground-level wide shot"
+  * Portrait/figure: "A stern general in 1905 uniform studying a map by candlelight, over-the-shoulder framing"
+  * Map/geography: "Topographical military map of Manchuria showing troop movements during the Battle of Mukden"
+  * Diagram/schematic: "Diagram explaining indirect artillery fire over a mountain ridge, cross-section view"
+  * Chart/data: "Comparative bar chart showing the scale of major land engagements"
+  * Landscape/terrain: "Frozen Manchurian plains stretching to the horizon under an overcast sky, wide establishing shot"
+
+HISTORICAL ACCURACY: Match uniforms, weapons, terrain, and props to the historical period in the video title.
+PEOPLE: Anonymous figures only — no identifiable faces. Silhouettes, backs turned, obscured by helmets/smoke/shadow.
+
+Return ONLY valid JSON matching this exact schema:
+{
+  "scenes": [
+    {
+      "scene_number": 1,
+      "scene_type": "character|location|crowd|battle_light|artifact|transition|map|diagram|chart",
+      "historical_period": "derived from title and scene context",
+      "visual_priority": "character|environment|object",
+      "image_prompt": "Short subject description only, no style words.",
+      "fallback_prompts": [
+        "Alternative subject angle or framing.",
+        "Different focal point or camera distance.",
+        "Symbolic or aftermath perspective."
+      ]
+    }
+  ]
+}`;
+
 const BATCH_IMAGE_PROMPT = `You are a visual content director for a YouTube history documentary.
 
 For each numbered scene below, generate ONE cinematic image prompt and THREE fallback prompts.
@@ -262,8 +307,10 @@ async function callGroqForBatch(
   title: string,
   scenes: Array<{ scene_number: number; script_text: string }>,
   groqApiKey: string,
-  retryOnRateLimit = true
+  retryOnRateLimit = true,
+  stylePrompt?: string
 ): Promise<BatchPromptResult[]> {
+  const systemPrompt = stylePrompt ? STYLE_PROMPT_BATCH_IMAGE_PROMPT : BATCH_IMAGE_PROMPT;
   const scenesText = scenes
     .map(s => `Scene ${s.scene_number}: "${s.script_text}"`)
     .join("\n");
@@ -276,7 +323,7 @@ async function callGroqForBatch(
     payload: {
       model: "openai/gpt-oss-120b",
       messages: [
-        { role: "system", content: BATCH_IMAGE_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
       temperature: 0.3,
@@ -293,7 +340,7 @@ async function callGroqForBatch(
       if (retryOnRateLimit) {
         console.log("[groq] Rate limited — waiting 15s before retry...");
         await delay(15000);
-        return callGroqForBatch(title, scenes, groqApiKey, false);
+        return callGroqForBatch(title, scenes, groqApiKey, false, stylePrompt);
       }
       throw new Error("Groq rate limited — try again in a moment.");
     }
@@ -316,14 +363,15 @@ export async function generateScenesForChunk(
   _totalChunks: number,
   startSceneNumber: number,
   groqApiKey: string,
-  splitMode: "smart" | "exact" | "duration" = "smart"
+  splitMode: "smart" | "exact" | "duration" = "smart",
+  stylePrompt?: string
 ): Promise<SceneManifest[]> {
   const sceneChunks = (splitMode === "duration"
     ? splitScriptByDuration(chunk)
     : splitScriptIntoScenes(chunk, splitMode === "exact" ? "exact" : "smart")
   ).map((s, idx) => ({ ...s, scene_number: startSceneNumber + idx }));
 
-  const prompts = await callGroqForBatch(title, sceneChunks, groqApiKey);
+  const prompts = await callGroqForBatch(title, sceneChunks, groqApiKey, true, stylePrompt);
 
   return sceneChunks.map((sc, idx) => {
     const p = prompts[idx] || {} as BatchPromptResult;
@@ -348,7 +396,8 @@ export async function generateSceneManifest(
   _styleSummary: any,
   groqApiKey: string,
   splitMode: "smart" | "exact" | "duration" = "smart",
-  onChunkProgress?: (current: number, total: number) => void
+  onChunkProgress?: (current: number, total: number) => void,
+  stylePrompt?: string
 ): Promise<SceneManifest[]> {
   const sceneChunks = splitMode === "duration"
     ? splitScriptByDuration(script)
@@ -363,7 +412,7 @@ export async function generateSceneManifest(
 
     const batch = sceneChunks.slice(i, i + BATCH_SIZE);
     const batchIdx = Math.floor(i / BATCH_SIZE);
-    const prompts = await callGroqForBatch(title, batch, groqApiKey);
+    const prompts = await callGroqForBatch(title, batch, groqApiKey, true, stylePrompt);
 
     const merged: SceneManifest[] = batch.map((sc, idx) => {
       const p = prompts[idx] || {} as BatchPromptResult;

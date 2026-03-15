@@ -69,12 +69,17 @@ router.post("/", async (req: Request, res: Response) => {
       const imgDir = path.join("uploads", projectId, "images");
       fs.mkdirSync(imgDir, { recursive: true });
 
+      const regenStylePrompt: string | undefined = settings.stylePrompt;
+
       try {
         if (imageProvider === "whisk") {
           const cookie = process.env.WHISK_COOKIE;
           if (!cookie) throw new Error("WHISK_COOKIE not configured");
-          const stylePaths = getStyleImagePaths(projectId);
-          const allPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+          const stylePaths = regenStylePrompt ? [] : getStyleImagePaths(projectId);
+          const rawPrompts = [scene.image_prompt, ...(scene.fallback_prompts as string[] || [])];
+          const allPrompts = regenStylePrompt
+            ? rawPrompts.map((p: string) => `${p}, ${regenStylePrompt}`)
+            : rawPrompts;
           let bytes: Uint8Array | null = null;
           for (const prompt of allPrompts) {
             try { bytes = await generateWhiskImageWithRefs(prompt, cookie, stylePaths); break; } catch (e: any) { console.error(`Whisk prompt failed: ${e.message}`); }
