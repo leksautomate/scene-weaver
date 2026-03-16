@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { getProject, getAssetUrl, regenerateAssetFrontend, bulkRegeneratePending, startClipGeneration, getClipStatus, getClipsZipUrl, startRender, getRenderStatus, getRenderDownloadUrl } from "@/lib/api";
+import { getProject, getAssetUrl, regenerateAssetFrontend, bulkRegeneratePending, startClipGeneration, getClipStatus, getClipsZipUrl, startRender, getRenderStatus, getRenderDownloadUrl, startAnimateScenes, getAnimateStatus, getAnimateZipUrl } from "@/lib/api";
 import { regenerateImagePrompt } from "@/lib/providers";
 import type { Scene } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import {
   Volume2, VolumeX, Loader2, RefreshCw, Sparkles,
   PanelRightOpen, PanelRightClose, Save, Image as ImageIcon,
   Film, Download, CheckCircle2, AlertTriangle, FolderDown, Merge,
+  Video, VideoOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Slider } from "@/components/ui/slider";
@@ -48,6 +49,15 @@ export default function ProjectPreview() {
   const [renderResolution, setRenderResolution] = useState<"480p" | "720p">("720p");
   const [renderError, setRenderError] = useState<string | null>(null);
   const renderPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [animateSelected, setAnimateSelected] = useState<Set<number>>(new Set());
+  const [animateStatus, setAnimateStatus] = useState<"idle" | "animating" | "done" | "failed">("idle");
+  const [animateProgress, setAnimateProgress] = useState(0);
+  const [animateDone, setAnimateDone] = useState(0);
+  const [animateTotal, setAnimateTotal] = useState(0);
+  const [animatedScenes, setAnimatedScenes] = useState<Set<number>>(new Set());
+  const [animateError, setAnimateError] = useState<string | null>(null);
+  const animatePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -104,6 +114,25 @@ export default function ProjectPreview() {
       }
     }).catch(() => {});
     return () => { if (renderPollRef.current) clearInterval(renderPollRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Restore animate state on mount
+  useEffect(() => {
+    if (!projectId) return;
+    getAnimateStatus(projectId).then(s => {
+      if (s.status === "animating") {
+        setAnimateStatus("animating");
+        setAnimateProgress(s.progress ?? 0);
+        setAnimateDone(s.done ?? 0);
+        setAnimateTotal(s.total ?? 0);
+        startAnimatePolling(projectId);
+      } else if (s.status === "done") {
+        setAnimateStatus("done");
+        setAnimatedScenes(new Set(Array.from({ length: s.done ?? 0 }, (_, i) => i + 1)));
+      }
+    }).catch(() => {});
+    return () => { if (animatePollRef.current) clearInterval(animatePollRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -350,6 +379,57 @@ export default function ProjectPreview() {
     }
   };
 
+  const startAnimatePolling = (pid: string) => {
+    if (animatePollRef.current) clearInterval(animatePollRef.current);
+    animatePollRef.current = setInterval(async () => {
+      try {
+        const s = await getAnimateStatus(pid);
+        setAnimateProgress(s.progress ?? 0);
+        if (s.done !== undefined) setAnimateDone(s.done);
+        if (s.total) setAnimateTotal(s.total);
+        if (s.status === "done") {
+          setAnimateStatus("done");
+          clearInterval(animatePollRef.current!);
+          toast.success(`${s.total ?? s.done} scenes animated with Veo! Generate clips to use them.`);
+        } else if (s.status === "failed") {
+          setAnimateStatus("failed");
+          setAnimateError(s.error ?? "Unknown error");
+          clearInterval(animatePollRef.current!);
+          toast.error(`Animation failed: ${s.error}`);
+        }
+      } catch { /* keep polling */ }
+    }, 3000);
+  };
+
+  const handleAnimateScenes = async () => {
+    if (!projectId || animateSelected.size === 0) return;
+    const settings = loadProviderSettings();
+    if (!settings.whiskCookie) { toast.error("Whisk cookie not configured in Settings"); return; }
+    setAnimateError(null);
+    setAnimateStatus("animating");
+    setAnimateProgress(0);
+    try {
+      const { total } = await startAnimateScenes(projectId, Array.from(animateSelected), settings.whiskCookie);
+      setAnimateTotal(total);
+      setAnimateDone(0);
+      toast.success(`Animating ${total} scenes with Veo…`);
+      startAnimatePolling(projectId);
+    } catch (e: any) {
+      setAnimateStatus("failed");
+      setAnimateError(e.message);
+      toast.error(e.message);
+    }
+  };
+
+  const toggleAnimateScene = (sceneNum: number) => {
+    setAnimateSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(sceneNum)) next.delete(sceneNum);
+      else next.add(sceneNum);
+      return next;
+    });
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -404,6 +484,38 @@ export default function ProjectPreview() {
                 </button>
               ))}
             </div>
+
+            {/* Veo Animation — per-scene toggle driven; shown when idle or done */}
+            {animateStatus === "idle" && animateSelected.size > 0 && (
+              <Button size="sm" variant="secondary" onClick={handleAnimateScenes}>
+                <Video className="h-3 w-3 mr-1" />Animate {animateSelected.size} with Veo
+              </Button>
+            )}
+            {animateStatus === "animating" && (
+              <Button size="sm" variant="secondary" disabled>
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                Veo {animateDone}/{animateTotal} ({animateProgress}%)
+              </Button>
+            )}
+            {animateStatus === "done" && (
+              <div className="flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3 text-success" />
+                <span className="text-xs text-muted-foreground">{animateTotal} animated</span>
+                {projectId && (
+                  <a href={getAnimateZipUrl(projectId)} download="animated-scenes.zip">
+                    <Button size="sm" variant="outline">
+                      <Video className="h-3 w-3 mr-1" />Veo ZIP
+                    </Button>
+                  </a>
+                )}
+              </div>
+            )}
+            {animateStatus === "failed" && (
+              <div className="flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3 text-destructive" title={animateError ?? ""} />
+                <Button size="sm" variant="outline" onClick={() => setAnimateStatus("idle")}>Retry Veo</Button>
+              </div>
+            )}
 
             {/* Phase 1: Generate Clips */}
             {clipStatus === "idle" && (
@@ -556,7 +668,18 @@ export default function ProjectPreview() {
                     )}
                     <div className="absolute bottom-0 left-0 right-0 bg-background/80 px-1 py-0.5 flex items-center justify-between">
                       <span className="text-[10px] font-display text-primary font-bold">{s.scene_number}</span>
-                      {dur && <span className="text-[10px] text-muted-foreground">{dur.toFixed(1)}s</span>}
+                      <div className="flex items-center gap-0.5">
+                        {dur && <span className="text-[10px] text-muted-foreground">{dur.toFixed(1)}s</span>}
+                        {s.image_status === "completed" && (
+                          <button
+                            onClick={e => { e.stopPropagation(); toggleAnimateScene(s.scene_number); }}
+                            className={`ml-0.5 rounded transition-colors ${animateSelected.has(s.scene_number) ? "text-info" : "text-muted-foreground hover:text-foreground"}`}
+                            title={animateSelected.has(s.scene_number) ? "Remove from Veo animation" : "Add to Veo animation"}
+                          >
+                            <Video className="h-2.5 w-2.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </button>
                 );
@@ -595,9 +718,24 @@ export default function ProjectPreview() {
               </Button>
             </div>
           </div>
-          <div className="border-t border-border p-4 shrink-0">
-            <p className="text-xs text-muted-foreground mb-1">Script Text</p>
-            <p className="text-xs text-foreground/80 leading-relaxed line-clamp-4">{scene.script_text}</p>
+          <div className="border-t border-border p-4 shrink-0 space-y-3">
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Script Text</p>
+              <p className="text-xs text-foreground/80 leading-relaxed line-clamp-4">{scene.script_text}</p>
+            </div>
+            {scene.image_status === "completed" && (
+              <Button
+                size="sm"
+                variant={animateSelected.has(scene.scene_number) ? "default" : "outline"}
+                onClick={() => toggleAnimateScene(scene.scene_number)}
+                className="w-full"
+              >
+                {animateSelected.has(scene.scene_number)
+                  ? <><VideoOff className="h-3 w-3 mr-1" />Remove from Veo</>
+                  : <><Video className="h-3 w-3 mr-1" />Animate with Veo</>
+                }
+              </Button>
+            )}
           </div>
         </div>
       )}

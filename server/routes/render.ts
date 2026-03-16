@@ -6,6 +6,7 @@ import path from "path";
 import fs from "fs";
 import { execSync, spawn } from "child_process";
 import archiver from "archiver";
+import { animateWhiskImage } from "../lib/whisk.js";
 
 const router = express.Router();
 
@@ -69,6 +70,15 @@ type MergeJob = {
 const clipJobs: Record<string, ClipJob> = {};
 const mergeJobs: Record<string, MergeJob> = {};
 
+type AnimateJob = {
+  status: "animating" | "done" | "failed";
+  progress: number;
+  done: number;
+  total: number;
+  error?: string;
+};
+const animateJobs: Record<string, AnimateJob> = {};
+
 // ── FFmpeg helpers ─────────────────────────────────────────────────────────
 
 function ffmpeg(args: string[]): Promise<void> {
@@ -101,6 +111,15 @@ function findImageFile(projectId: string, sceneNumber: number, dbFile?: string |
     path.join(imgDir, `${sceneNumber}.svg`),
   ].filter(Boolean) as string[];
   return candidates.find(p => fs.existsSync(p)) ?? null;
+}
+
+function hasAudioStream(file: string): boolean {
+  try {
+    const out = execSync(
+      `ffprobe -v error -select_streams a -show_entries stream=codec_type -of default=noprint_wrappers=1 "${file}"`
+    ).toString().trim();
+    return out.length > 0;
+  } catch { return false; }
 }
 
 // ── Routes ─────────────────────────────────────────────────────────────────
@@ -186,6 +205,81 @@ router.get("/:id/clips/zip", (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/render/:id/animate
+ * Animate selected scenes using Whisk/Veo. Body: { scenes: number[] }
+ * Header: x-whisk-cookie
+ */
+router.post("/:id/animate", async (req: Request, res: Response) => {
+  const projectId = req.params.id;
+  const cookie = req.headers["x-whisk-cookie"] as string;
+  if (!cookie) return res.status(400).json({ error: "Whisk cookie required (x-whisk-cookie header)" });
+
+  const sceneNums = (req.body?.scenes as number[]) || [];
+  if (sceneNums.length === 0) return res.status(400).json({ error: "No scenes provided" });
+
+  const allScenes = await db.select().from(scenes).where(eq(scenes.project_id, projectId)).orderBy(scenes.scene_number);
+  const toAnimate = allScenes.filter(s => sceneNums.includes(s.scene_number) && s.image_status === "completed");
+  if (toAnimate.length === 0) return res.status(400).json({ error: "No scenes with completed images to animate" });
+
+  animateJobs[projectId] = { status: "animating", progress: 0, done: 0, total: toAnimate.length };
+  res.json({ success: true, total: toAnimate.length });
+
+  animateScenes(projectId, sceneNums, allScenes, cookie).catch(e => {
+    animateJobs[projectId] = { ...animateJobs[projectId], status: "failed", error: e.message };
+  });
+});
+
+/** GET /api/render/:id/animate/status */
+router.get("/:id/animate/status", (req: Request, res: Response) => {
+  const job = animateJobs[req.params.id];
+  if (job) return res.json(job);
+  const videosDir = path.join("uploads", req.params.id, "videos");
+  if (fs.existsSync(videosDir)) {
+    const vids = fs.readdirSync(videosDir).filter(f => f.endsWith(".mp4"));
+    if (vids.length > 0) return res.json({ status: "done", progress: 100, done: vids.length, total: vids.length });
+  }
+  res.json({ status: "idle" });
+});
+
+/**
+ * GET /api/render/:id/animate/zip
+ * Download animated scenes as ZIP. Prefers final clips (with audio), falls back to raw Veo.
+ */
+router.get("/:id/animate/zip", (req: Request, res: Response) => {
+  const projectId = req.params.id;
+  const videosDir = path.join("uploads", projectId, "videos");
+  const clipsDir = path.join("uploads", projectId, "clips");
+
+  if (!fs.existsSync(videosDir)) return res.status(404).json({ error: "No animated scenes found." });
+
+  const animatedNums = fs.readdirSync(videosDir)
+    .filter(f => f.endsWith(".mp4"))
+    .map(f => parseInt(f))
+    .filter(n => !isNaN(n))
+    .sort((a, b) => a - b);
+
+  if (animatedNums.length === 0) return res.status(404).json({ error: "No animated scenes found." });
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="animated-scenes.zip"`);
+
+  const archive = archiver("zip", { zlib: { level: 0 } });
+  archive.on("error", err => { console.error("[zip] error:", err); res.destroy(); });
+  archive.pipe(res);
+
+  for (const num of animatedNums) {
+    const clip = path.join(clipsDir, `${num}.mp4`);
+    const raw = path.join(videosDir, `${num}.mp4`);
+    if (fs.existsSync(clip)) {
+      archive.file(clip, { name: `scene_${num}_animated.mp4` });
+    } else if (fs.existsSync(raw)) {
+      archive.file(raw, { name: `scene_${num}_animated_raw.mp4` });
+    }
+  }
+  archive.finalize();
+});
+
+/**
  * POST /api/render/:id
  * Phase 2: merge clips into a single output.mp4 with smooth transitions.
  * Uses pre-generated clips from clips/ dir if available, otherwise generates inline.
@@ -243,6 +337,43 @@ router.get("/:id/download", (req: Request, res: Response) => {
 // silenceremove removed — stop_periods=1 terminates the stream on any inter-word pause
 const AUDIO_FILTER = `loudnorm=I=-16:LRA=11:TP=-1.5`;
 
+async function buildVeoClip(
+  veoPath: string, audioPath: string, dur: number,
+  width: number, height: number, outPath: string
+): Promise<void> {
+  const veoAudio = hasAudioStream(veoPath);
+  const vScale = `scale=${width}:${height}:flags=lanczos,setsar=1,fps=25,format=yuv420p`;
+
+  if (veoAudio) {
+    await ffmpeg([
+      "-y",
+      "-stream_loop", "-1", "-i", veoPath,
+      "-i", audioPath,
+      "-filter_complex",
+        `[0:v]${vScale}[v];` +
+        `[0:a]volume=0.1[va];[1:a]${AUDIO_FILTER}[na];[va][na]amix=inputs=2:duration=first[a]`,
+      "-map", "[v]", "-map", "[a]",
+      "-t", `${dur}`,
+      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+      outPath,
+    ]);
+  } else {
+    await ffmpeg([
+      "-y",
+      "-stream_loop", "-1", "-i", veoPath,
+      "-i", audioPath,
+      "-filter_complex",
+        `[0:v]${vScale}[v];[1:a]${AUDIO_FILTER}[a]`,
+      "-map", "[v]", "-map", "[a]",
+      "-t", `${dur}`,
+      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+      outPath,
+    ]);
+  }
+}
+
 /**
  * Phase 1: generate one MP4 per scene, named by scene number (1.mp4, 2.mp4, …).
  * Duration = audio duration. Ken Burns effect applied at random (no repeat).
@@ -270,27 +401,31 @@ async function generateClips(projectId: string, sceneList: any[], width: number,
 
     const dur = parseFloat(getAudioDuration(audioPath).toFixed(3));
     const frames = Math.round(FPS * dur);
-    const effect = pickEffect(prevEffect);
-    prevEffect = effect;
-
-    const zp = buildZoompan(effect, frames, width, height);
     const clipPath = path.join(clipsDir, `${num}.mp4`);
+    const veoPath = path.join("uploads", projectId, "videos", `${num}.mp4`);
 
-    await ffmpeg([
-      "-y",
-      // -t before -i img: limits the looped input to exactly dur seconds so
-      // zoompan receives the correct frame count and animates properly
-      "-loop", "1", "-framerate", `${FPS}`, "-t", `${dur}`, "-i", img,
-      "-i", audioPath,
-      "-filter_complex",
-        `[0:v]${zp},fps=${FPS},format=yuv420p[v];` +
-        `[1:a]${AUDIO_FILTER}[a]`,
-      "-map", "[v]", "-map", "[a]",
-      "-t", `${dur}`,
-      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-      clipPath,
-    ]);
+    if (fs.existsSync(veoPath)) {
+      // Use Veo-generated video: loop to fill audio duration, mix narration over
+      console.log(`[clips] scene ${num}: using Veo video`);
+      await buildVeoClip(veoPath, audioPath, dur, width, height, clipPath);
+    } else {
+      const effect = pickEffect(prevEffect);
+      prevEffect = effect;
+      const zp = buildZoompan(effect, frames, width, height);
+      await ffmpeg([
+        "-y",
+        "-loop", "1", "-framerate", `${FPS}`, "-t", `${dur}`, "-i", img,
+        "-i", audioPath,
+        "-filter_complex",
+          `[0:v]${zp},fps=${FPS},format=yuv420p[v];` +
+          `[1:a]${AUDIO_FILTER}[a]`,
+        "-map", "[v]", "-map", "[a]",
+        "-t", `${dur}`,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+        clipPath,
+      ]);
+    }
 
     done++;
     clipJobs[projectId].done = done;
@@ -408,6 +543,39 @@ async function mergeVideo(projectId: string, sceneList: any[], width: number, he
 
   mergeJobs[projectId] = { status: "done", progress: 100, total: sceneList.length, resolution: mergeJobs[projectId].resolution };
   console.log(`[merge] ${projectId}: done → ${outPath}`);
+}
+
+async function animateScenes(
+  projectId: string,
+  sceneNumbers: number[],
+  sceneList: any[],
+  cookie: string
+) {
+  const videosDir = path.join("uploads", projectId, "videos");
+  fs.mkdirSync(videosDir, { recursive: true });
+
+  let done = 0;
+  for (const num of sceneNumbers) {
+    const s = sceneList.find((sc: any) => sc.scene_number === num);
+    if (!s) continue;
+    const img = findImageFile(projectId, num, s.image_file);
+    if (!img) {
+      console.warn(`[animate] scene ${num}: no image, skipping`);
+      continue;
+    }
+    const videoPath = path.join(videosDir, `${num}.mp4`);
+    try {
+      const buf = await animateWhiskImage(img, cookie, s.image_prompt || "");
+      fs.writeFileSync(videoPath, buf);
+      done++;
+      animateJobs[projectId].done = done;
+      animateJobs[projectId].progress = Math.round((done / sceneNumbers.length) * 100);
+      console.log(`[animate] ${projectId}: scene ${num} done (${done}/${sceneNumbers.length})`);
+    } catch (e: any) {
+      console.error(`[animate] scene ${num} failed:`, e.message);
+    }
+  }
+  animateJobs[projectId] = { ...animateJobs[projectId], status: "done", progress: 100 };
 }
 
 export default router;

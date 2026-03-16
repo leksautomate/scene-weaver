@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { Whisk } from "@rohitaryal/whisk-api";
+import { Whisk, VideoGenerationModel } from "@rohitaryal/whisk-api";
 
 function decodeEncodedImage(encodedImage: string): Uint8Array {
   const binary = atob(encodedImage);
@@ -85,4 +85,20 @@ export function getStyleImagePaths(projectId: string): string[] {
     path.join("uploads", projectId, "style", "style1.png"),
     path.join("uploads", projectId, "style", "style2.png"),
   ];
+}
+
+export async function animateWhiskImage(
+  imagePath: string,
+  cookie: string,
+  videoScript: string
+): Promise<Buffer> {
+  const whisk = new Whisk(cookie);
+  const project = await whisk.newProject("Historia-Animate-" + Date.now());
+  const mediaRef = await project.addSubject({ file: imagePath });
+  const imageMedia = await Whisk.getMedia(mediaRef.mediaGenerationId, whisk.account);
+  const videoMedia = await imageMedia.animate(videoScript, VideoGenerationModel.VEO_3_1);
+  const binary = atob(videoMedia.encodedMedia);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return Buffer.from(bytes);
 }

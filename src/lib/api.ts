@@ -590,6 +590,41 @@ export function getRenderDownloadUrl(projectId: string): string {
   return `/api/render/${projectId}/download`;
 }
 
+export async function startAnimateScenes(
+  projectId: string,
+  sceneNumbers: number[],
+  whiskCookie: string
+): Promise<{ total: number }> {
+  return fetch(`${API_BASE}/render/${projectId}/animate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-whisk-cookie": whiskCookie,
+    },
+    body: JSON.stringify({ scenes: sceneNumbers }),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ error: r.statusText }));
+      throw new Error(err.error || `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+}
+
+export async function getAnimateStatus(projectId: string): Promise<{
+  status: "idle" | "animating" | "done" | "failed";
+  progress: number;
+  done: number;
+  total: number;
+  error?: string;
+}> {
+  return apiRequest(`/render/${projectId}/animate/status`);
+}
+
+export function getAnimateZipUrl(projectId: string): string {
+  return `/api/render/${projectId}/animate/zip`;
+}
+
 export async function resumeProject(projectId: string, callbacks: PipelineCallbacks): Promise<void> {
   const settings = loadProviderSettings();
   await fetch(`${API_BASE}/projects/${projectId}`, {
