@@ -19,28 +19,40 @@ function pickEffect(prev?: KBEffect): KBEffect {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-function buildZoompan(effect: KBEffect, frames: number, width: number, height: number): string {
-  const PAN_FRAC = 0.23077;
-  const spd_h = (PAN_FRAC / frames).toFixed(6);
-  const spd_v = (PAN_FRAC / frames).toFixed(6);
-  const size = `${width}x${height}`;
+/**
+ * Ken Burns using scale+crop with FFmpeg `t` (timestamp) expressions.
+ * Works reliably on both still images and video — unlike zoompan which
+ * was designed for stills only and fails silently on video inputs.
+ *
+ * @param maxZoom  max zoom factor: 1.3 for still images, 1.15 for Veo clips
+ */
+function buildKB(effect: KBEffect, dur: number, width: number, height: number, maxZoom = 1.3): string {
+  const d = dur.toFixed(3);
+  const zm = maxZoom.toFixed(3);
+  const inc = (maxZoom - 1).toFixed(3);
+  const panW = Math.round(width * maxZoom / 2) * 2;
+  const panH = Math.round(height * maxZoom / 2) * 2;
   switch (effect) {
-    case "zoom-in": {
-      const inc = (0.5 / frames).toFixed(6);
-      return `scale=8000:-1,zoompan=z='min(pzoom+${inc},1.5)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${size}`;
-    }
-    case "zoom-out": {
-      const dec = (0.5 / frames).toFixed(6);
-      return `scale=8000:-1,zoompan=z='if(eq(on,1),1.5,max(pzoom-${dec},1.0))':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${size}`;
-    }
+    case "zoom-in":
+      // Scale grows 1.0× → maxZoom× over the clip; crop holds center W×H
+      return `scale='${width}*(1+${inc}*min(t,${d})/${d})':'${height}*(1+${inc}*min(t,${d})/${d})':flags=lanczos,` +
+             `crop=${width}:${height}:'(iw-ow)/2':'(ih-oh)/2'`;
+    case "zoom-out":
+      // Scale shrinks maxZoom× → 1.0×
+      return `scale='${width}*(${zm}-${inc}*min(t,${d})/${d})':'${height}*(${zm}-${inc}*min(t,${d})/${d})':flags=lanczos,` +
+             `crop=${width}:${height}:'(iw-ow)/2':'(ih-oh)/2'`;
     case "pan-right":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='min(px+iw*${spd_h},iw*(1-1/zoom))':y='ih/2-(ih/zoom/2)':s=${size}`;
+      return `scale=${panW}:${panH}:flags=lanczos,` +
+             `crop=${width}:${height}:'min((iw-ow)*min(t,${d})/${d},iw-ow)':'(ih-oh)/2'`;
     case "pan-left":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='if(eq(on,1),iw*(1-1/zoom),max(px-iw*${spd_h},0))':y='ih/2-(ih/zoom/2)':s=${size}`;
+      return `scale=${panW}:${panH}:flags=lanczos,` +
+             `crop=${width}:${height}:'max((iw-ow)*(1-min(t,${d})/${d}),0)':'(ih-oh)/2'`;
     case "pan-up":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='if(eq(on,1),ih*(1-1/zoom),max(py-ih*${spd_v},0))':s=${size}`;
+      return `scale=${panW}:${panH}:flags=lanczos,` +
+             `crop=${width}:${height}:'(iw-ow)/2':'max((ih-oh)*(1-min(t,${d})/${d}),0)'`;
     case "pan-down":
-      return `scale=8000:-1,zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='min(py+ih*${spd_v},ih*(1-1/zoom))':s=${size}`;
+      return `scale=${panW}:${panH}:flags=lanczos,` +
+             `crop=${width}:${height}:'(iw-ow)/2':'min((ih-oh)*min(t,${d})/${d},ih-oh)'`;
   }
 }
 
@@ -358,45 +370,17 @@ router.get("/:id/download", async (req: Request, res: Response) => {
 // silenceremove removed — stop_periods=1 terminates the stream on any inter-word pause
 const AUDIO_FILTER = `loudnorm=I=-16:LRA=11:TP=-1.5`;
 
-/** Subtle Ken Burns for Veo clips — zoom range 1.0–1.15 (vs 1.0–1.5 for stills) */
-function buildVeoZoompan(effect: KBEffect, frames: number, width: number, height: number): string {
-  const PAN_FRAC = 0.23077;
-  const spd_h = (PAN_FRAC / frames).toFixed(6);
-  const spd_v = (PAN_FRAC / frames).toFixed(6);
-  const size = `${width}x${height}`;
-  switch (effect) {
-    case "zoom-in": {
-      const inc = (0.15 / frames).toFixed(6);
-      return `zoompan=z='min(pzoom+${inc},1.15)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${size}`;
-    }
-    case "zoom-out": {
-      const dec = (0.15 / frames).toFixed(6);
-      return `zoompan=z='if(eq(on,1),1.15,max(pzoom-${dec},1.0))':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${size}`;
-    }
-    case "pan-right":
-      return `zoompan=z=1.3:d=${frames}:x='min(px+iw*${spd_h},iw*(1-1/zoom))':y='ih/2-(ih/zoom/2)':s=${size}`;
-    case "pan-left":
-      return `zoompan=z=1.3:d=${frames}:x='if(eq(on,1),iw*(1-1/zoom),max(px-iw*${spd_h},0))':y='ih/2-(ih/zoom/2)':s=${size}`;
-    case "pan-up":
-      return `zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='if(eq(on,1),ih*(1-1/zoom),max(py-ih*${spd_v},0))':s=${size}`;
-    case "pan-down":
-      return `zoompan=z=1.3:d=${frames}:x='iw/2-(iw/zoom/2)':y='min(py+ih*${spd_v},ih*(1-1/zoom))':s=${size}`;
-  }
-}
-
 async function buildVeoClip(
   veoPath: string, audioPath: string, dur: number,
   width: number, height: number, outPath: string
 ): Promise<void> {
   const veoAudio = hasAudioStream(veoPath);
   const FPS = 25;
-  const frames = Math.ceil(dur * FPS);
   const effect = pickEffect();
-  const kbFilter = buildVeoZoompan(effect, frames, width, height);
-  // Scale up 1.3× to give zoompan room to crop, then back down to target
-  const sw = Math.round(width * 1.3 / 2) * 2;
-  const sh = Math.round(height * 1.3 / 2) * 2;
-  const vScale = `scale=${sw}:${sh}:flags=lanczos,${kbFilter},scale=${width}:${height},setsar=1,fps=${FPS},format=yuv420p`;
+  // Veo clips: subtle zoom (1.15×) so it doesn't fight the AI motion
+  const kbFilter = buildKB(effect, dur, width, height, 1.15);
+  // fps=25 first normalises input frame rate so t expressions are consistent
+  const vScale = `fps=${FPS},${kbFilter},setsar=1,format=yuv420p`;
 
   if (veoAudio) {
     await ffmpeg([
@@ -465,13 +449,13 @@ async function generateClips(projectId: string, sceneList: any[], width: number,
     } else {
       const effect = pickEffect(prevEffect);
       prevEffect = effect;
-      const zp = buildZoompan(effect, frames, width, height);
+      const kbFilter = buildKB(effect, dur, width, height, 1.3);
       await ffmpeg([
         "-y",
         "-loop", "1", "-framerate", `${FPS}`, "-t", `${dur}`, "-i", img,
         "-i", audioPath,
         "-filter_complex",
-          `[0:v]${zp},fps=${FPS},format=yuv420p[v];` +
+          `[0:v]${kbFilter},setsar=1,fps=${FPS},format=yuv420p[v];` +
           `[1:a]${AUDIO_FILTER}[a]`,
         "-map", "[v]", "-map", "[a]",
         "-t", `${dur}`,
@@ -528,17 +512,16 @@ async function mergeVideo(projectId: string, sceneList: any[], width: number, he
         continue;
       }
       const dur = parseFloat(getAudioDuration(audioPath).toFixed(3));
-      const frames = Math.round(FPS * dur);
       const effect = pickEffect(prevEffect);
       prevEffect = effect;
-      const zp = buildZoompan(effect, frames, width, height);
+      const kbFilter = buildKB(effect, dur, width, height, 1.3);
       const clip = path.join(renderDir, `tmp_${i}.mp4`);
       await ffmpeg([
         "-y",
         "-loop", "1", "-framerate", `${FPS}`, "-t", `${dur}`, "-i", img,
         "-i", audioPath,
         "-filter_complex",
-          `[0:v]${zp},fps=${FPS},format=yuv420p[v];[1:a]${AUDIO_FILTER}[a]`,
+          `[0:v]${kbFilter},setsar=1,fps=${FPS},format=yuv420p[v];[1:a]${AUDIO_FILTER}[a]`,
         "-map", "[v]", "-map", "[a]",
         "-t", `${dur}`,
         "-c:v", "libx264", "-preset", "fast", "-crf", "22",
