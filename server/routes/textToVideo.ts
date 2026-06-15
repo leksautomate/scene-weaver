@@ -142,6 +142,10 @@ router.post("/", async (req: Request, res: Response) => {
     res.status(400).json({ error: "prompts must be a non-empty array" });
     return;
   }
+  if (prompts.length > 100) {
+    res.status(400).json({ error: "Maximum 100 prompts per batch" });
+    return;
+  }
   if (aspectRatio !== "16:9" && aspectRatio !== "9:16") {
     res.status(400).json({ error: "aspectRatio must be '16:9' or '9:16'" });
     return;
@@ -194,6 +198,10 @@ router.post("/:jobId/retry", (req: Request, res: Response) => {
   if (!job) { res.status(404).json({ error: "Job not found" }); return; }
 
   const { index, prompt } = req.body as { index: number; prompt: string };
+  if (typeof index !== "number" || typeof prompt !== "string" || !prompt.trim()) {
+    res.status(400).json({ error: "index must be a number and prompt must be a non-empty string" });
+    return;
+  }
   const item = job.items.find((i) => i.index === index);
   if (!item) { res.status(404).json({ error: "Item not found" }); return; }
   if (item.status === "generating" || item.status === "completed") {
@@ -202,7 +210,7 @@ router.post("/:jobId/retry", (req: Request, res: Response) => {
   }
 
   item.prompt = prompt;
-  item.status = "pending";
+  item.status = "generating";  // set synchronously to prevent double-retry race
   delete item.error;
   if (job.status !== "running") job.status = "running";
   saveJobs();
@@ -214,7 +222,6 @@ router.post("/:jobId/retry", (req: Request, res: Response) => {
   (async () => {
     fs.mkdirSync(outputDir(jobId), { recursive: true });
     await acquireSemaphore();
-    item.status = "generating";
     saveJobs();
 
     const outPath = path.join(outputDir(jobId), itemFilename(item.index));

@@ -69,10 +69,11 @@ export default function TextToVideo() {
   async function handleDelete(e: React.MouseEvent, jobId: string) {
     e.stopPropagation();
     try {
-      await fetch(`/api/text-to-video/${jobId}`, { method: "DELETE" });
+      const res = await fetch(`/api/text-to-video/${jobId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(await res.text());
       setJobs((prev) => prev.filter((j) => j.id !== jobId));
-    } catch {
-      toast.error("Failed to delete job");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to delete job");
     }
   }
 
@@ -151,8 +152,8 @@ export default function TextToVideo() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-2 flex-wrap">
-                        <Badge variant={job.status === "running" ? "default" : "secondary"}>
-                          {job.status === "running" ? "Running" : "Done"}
+                        <Badge variant={job.status === "running" ? "default" : job.status === "stopped" ? "destructive" : "secondary"}>
+                          {job.status === "running" ? "Running" : job.status === "stopped" ? "Interrupted" : "Done"}
                         </Badge>
                         <span className="text-xs text-muted-foreground">{job.aspectRatio}</span>
                         <span className="text-xs text-muted-foreground">·</span>
@@ -172,7 +173,7 @@ export default function TextToVideo() {
                       variant="ghost"
                       size="icon"
                       className="shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={(e) => handleDelete(e, jobId)}
+                      onClick={(e) => handleDelete(e, job.id)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
