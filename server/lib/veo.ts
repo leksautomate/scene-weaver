@@ -70,6 +70,48 @@ export async function generateVeoClip(
   await pollVeoOperation(operation.name, outPath);
 }
 
+/**
+ * Generate a video from a text prompt only (no input image) using Veo.
+ * Saves the result to outPath. Throws on failure or timeout.
+ */
+export async function generateVeoTextClip(
+  prompt: string,
+  outPath: string,
+  aspectRatio?: string,
+  generateAudio?: boolean
+): Promise<void> {
+  const url = `https://${API_ENDPOINT}/v1/projects/${PROJECT_ID}/locations/${VEO_LOCATION}/publishers/google/models/${VEO_MODEL}:predictLongRunning`;
+
+  const body = {
+    instances: [{ prompt }],
+    parameters: {
+      sampleCount: 1,
+      durationSeconds: 8,
+      personGeneration: "allow_all",
+      generateAudio: generateAudio ?? true,
+      ...(aspectRatio === "9:16" ? { aspectRatio: "9:16" } : {}),
+    },
+  };
+
+  const token = getAccessToken();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Veo request failed: ${res.status} ${text}`);
+  }
+
+  const operation = (await res.json()) as { name: string };
+  if (!operation.name) throw new Error("Veo returned no operation name");
+
+  await pollVeoOperation(operation.name, outPath);
+}
+
 async function downloadGcs(gcsUri: string, outPath: string): Promise<void> {
   // gcsUri format: gs://bucket-name/path/to/file.mp4
   const withoutScheme = gcsUri.replace(/^gs:\/\//, "");
