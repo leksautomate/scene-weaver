@@ -196,7 +196,10 @@ router.post("/:jobId/retry", (req: Request, res: Response) => {
   const { index, prompt } = req.body as { index: number; prompt: string };
   const item = job.items.find((i) => i.index === index);
   if (!item) { res.status(404).json({ error: "Item not found" }); return; }
-  if (item.status === "generating") { res.status(409).json({ error: "Already generating" }); return; }
+  if (item.status === "generating" || item.status === "completed") {
+    res.status(409).json({ error: "Item is already completed or generating" });
+    return;
+  }
 
   item.prompt = prompt;
   item.status = "pending";
@@ -242,6 +245,10 @@ router.get("/:jobId/zip", (req: Request, res: Response) => {
   res.setHeader("Content-Type", "application/zip");
 
   const archive = archiver("zip", { zlib: { level: 0 } });
+  archive.on("error", (err) => {
+    console.error("[ttv] archive error:", err);
+    res.destroy();
+  });
   archive.pipe(res);
 
   for (const item of completed) {
@@ -258,6 +265,10 @@ router.get("/:jobId/zip", (req: Request, res: Response) => {
 router.delete("/:jobId", (req: Request, res: Response) => {
   const job = jobs.get(req.params.jobId);
   if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+  if (job.status === "running") {
+    res.status(409).json({ error: "Cannot delete a running job" });
+    return;
+  }
 
   try { fs.rmSync(outputDir(job.id), { recursive: true, force: true }); } catch {}
   jobs.delete(job.id);
