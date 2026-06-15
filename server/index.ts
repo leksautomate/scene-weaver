@@ -10,6 +10,7 @@ import regenerateRouter from "./routes/regenerate.js";
 import geminiProxyRouter from "./routes/gemini-proxy.js";
 import renderRouter from "./routes/render.js";
 import scriptToJsonRouter from "./routes/scriptToJson.js";
+import textToVideoRouter from "./routes/textToVideo.js";
 import authRouter from "./routes/auth.js";
 import adminRouter from "./routes/admin.js";
 import { requireAuth } from "./middleware/requireAuth.js";
@@ -41,6 +42,7 @@ app.use("/api/regenerate", regenerateRouter);
 app.use("/api/gemini-proxy", geminiProxyRouter);
 app.use("/api/render", renderRouter);
 app.use("/api/script-to-json", scriptToJsonRouter);
+app.use("/api/text-to-video", textToVideoRouter);
 app.use("/api/admin", adminRouter);
 
 const uploadsDir = path.join(process.cwd(), "uploads");
