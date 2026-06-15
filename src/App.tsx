@@ -16,6 +16,8 @@ import ErrorLog from "./pages/ErrorLog";
 import JsonToVideo from "./pages/JsonToVideo";
 import ImageModelTest from "./pages/ImageModelTest";
 import ScriptToJson from "./pages/ScriptToJson";
+import TextToVideo from "./pages/TextToVideo";
+import TextToVideoDetail from "./pages/TextToVideoDetail";
 import OverlayTest from "./pages/OverlayTest";
 import Setup from "./pages/Setup";
 import Login from "./pages/Login";
@@ -50,6 +52,8 @@ const App = () => (
                         <Route path="/json-to-video" element={<JsonToVideo />} />
                         <Route path="/image-test" element={<ImageModelTest />} />
                         <Route path="/script-to-json" element={<ScriptToJson />} />
+                        <Route path="/text-to-video" element={<TextToVideo />} />
+                        <Route path="/text-to-video/:jobId" element={<TextToVideoDetail />} />
                         <Route path="*" element={<NotFound />} />
                       </Routes>
                     </AppLayout>
