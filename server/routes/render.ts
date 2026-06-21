@@ -1499,6 +1499,48 @@ async function mergeVideo(
 }
 
 /**
+ * Post-process pass: mix a random bg_music/ track under the narration.
+ * Video stream is copied untouched (-c:v copy). Music is looped to fill
+ * the video length and trimmed to it (duration=first). Replaces videoPath
+ * in place. Returns false (no-op) when no tracks are available.
+ */
+async function applyBgMusic(
+  videoPath: string,
+  narrationVolume: number,
+  bgMusicVolume: number
+): Promise<boolean> {
+  const tracks = scanBgMusicTracks(BG_MUSIC_DIR);
+  if (tracks.length === 0) {
+    console.warn(`[bgmusic] no tracks in ${BG_MUSIC_DIR} — skipping`);
+    return false;
+  }
+  const track = tracks[Math.floor(Math.random() * tracks.length)];
+  const narrVol = narrationVolume.toFixed(4);
+  const musicVol = bgMusicVolume.toFixed(4);
+  const tmpOut = videoPath.replace(/\.mp4$/i, ".bgm.mp4");
+
+  console.log(`[bgmusic] mixing "${path.basename(track)}" (music ${musicVol}, narr ${narrVol})`);
+
+  await ffmpeg([
+    "-y",
+    "-i", videoPath,
+    "-stream_loop", "-1", "-i", track,
+    "-filter_complex",
+      `[0:a]volume=${narrVol}[narr];` +
+      `[1:a]volume=${musicVol}[music];` +
+      `[narr][music]amix=inputs=2:duration=first:normalize=0[aout]`,
+    "-map", "0:v", "-map", "[aout]",
+    "-c:v", "copy",
+    "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+    tmpOut,
+  ]);
+
+  fs.renameSync(tmpOut, videoPath);
+  console.log(`[bgmusic] done → ${videoPath}`);
+  return true;
+}
+
+/**
  * Full auto-pipeline: poll until all assets ready → generate clips → merge.
  * Runs entirely in-process; browser can be closed.
  */
