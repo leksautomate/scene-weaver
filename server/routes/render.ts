@@ -824,8 +824,8 @@ router.post("/:id/auto", async (req: Request, res: Response) => {
   const overlayFontSize = req.body?.overlayFontSize !== undefined ? parseInt(req.body.overlayFontSize, 10) : 36;
   const autoVeoAudioVolume = req.body?.veoAudioVolume !== undefined ? parseFloat(req.body.veoAudioVolume) : 0.1;
   const autoBgMusicEnabled = req.body?.bgMusicEnabled !== undefined ? !!req.body.bgMusicEnabled : true;
-  const autoNarrationVolume = req.body?.narrationVolume !== undefined ? parseFloat(req.body.narrationVolume) : 2.0;
-  const autoBgMusicVolume = req.body?.bgMusicVolume !== undefined ? parseFloat(req.body.bgMusicVolume) : 0.10;
+  const autoNarrationVolume = Number.isFinite(parseFloat(req.body?.narrationVolume)) ? parseFloat(req.body.narrationVolume) : 2.0;
+  const autoBgMusicVolume = Number.isFinite(parseFloat(req.body?.bgMusicVolume)) ? parseFloat(req.body.bgMusicVolume) : 0.10;
   const [autoProject] = await db.select().from(projects).where(eq(projects.id, projectId));
   const autoProjectAR: string = (autoProject?.settings as any)?.aspectRatio || "16:9";
   await upsertJobStatus(projectId, "auto", "running", { resolution: resKey });
@@ -893,8 +893,8 @@ router.post("/:id", async (req: Request, res: Response) => {
     const overlayFontSize = req.body?.overlayFontSize !== undefined ? parseInt(req.body.overlayFontSize, 10) : 36;
     const mergeVeoAudioVolume = req.body?.veoAudioVolume !== undefined ? parseFloat(req.body.veoAudioVolume) : 0.1;
     const bgMusicEnabled = req.body?.bgMusicEnabled !== undefined ? !!req.body.bgMusicEnabled : true;
-    const narrationVolume = req.body?.narrationVolume !== undefined ? parseFloat(req.body.narrationVolume) : 2.0;
-    const bgMusicVolume = req.body?.bgMusicVolume !== undefined ? parseFloat(req.body.bgMusicVolume) : 0.10;
+    const narrationVolume = Number.isFinite(parseFloat(req.body?.narrationVolume)) ? parseFloat(req.body.narrationVolume) : 2.0;
+    const bgMusicVolume = Number.isFinite(parseFloat(req.body?.bgMusicVolume)) ? parseFloat(req.body.bgMusicVolume) : 0.10;
 
     mergeJobs[projectId] = { status: "rendering", progress: 0, total: ready.length, resolution: resKey };
     await upsertJobStatus(projectId, "merge", "running", { resolution: resKey, total: ready.length });
@@ -1504,7 +1504,8 @@ async function mergeVideo(
 
   if (bgMusicEnabled) {
     try {
-      await applyBgMusic(outPath, narrationVolume, bgMusicVolume);
+      const applied = await applyBgMusic(outPath, narrationVolume, bgMusicVolume);
+      if (!applied) console.log(`[bgmusic] ${projectId}: no music applied`);
     } catch (e: any) {
       console.error(`[bgmusic] ${projectId}: mixing failed, keeping music-free output:`, e.message);
     }
@@ -1538,19 +1539,24 @@ async function applyBgMusic(
 
   console.log(`[bgmusic] mixing "${path.basename(track)}" (music ${musicVol}, narr ${narrVol})`);
 
-  await ffmpeg([
-    "-y",
-    "-i", videoPath,
-    "-stream_loop", "-1", "-i", track,
-    "-filter_complex",
-      `[0:a]volume=${narrVol}[narr];` +
-      `[1:a]volume=${musicVol}[music];` +
-      `[narr][music]amix=inputs=2:duration=first:normalize=0[aout]`,
-    "-map", "0:v", "-map", "[aout]",
-    "-c:v", "copy",
-    "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-    tmpOut,
-  ]);
+  try {
+    await ffmpeg([
+      "-y",
+      "-i", videoPath,
+      "-stream_loop", "-1", "-i", track,
+      "-filter_complex",
+        `[0:a]volume=${narrVol}[narr];` +
+        `[1:a]volume=${musicVol}[music];` +
+        `[narr][music]amix=inputs=2:duration=first:normalize=0[aout]`,
+      "-map", "0:v", "-map", "[aout]",
+      "-c:v", "copy",
+      "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+      tmpOut,
+    ]);
+  } catch (e) {
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch {}
+    throw e;
+  }
 
   fs.renameSync(tmpOut, videoPath);
   console.log(`[bgmusic] done → ${videoPath}`);
