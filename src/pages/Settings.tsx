@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,21 @@ export default function Settings() {
   const [storageLoading, setStorageLoading] = useState(false);
   const [confirmPurge, setConfirmPurge] = useState<string | null>(null);
   const [purgeLoading, setPurgeLoading] = useState(false);
+
+  const [bgTrackCount, setBgTrackCount] = useState<number | null>(null);
+
+  const fetchBgTracks = async () => {
+    try {
+      const res = await fetch("/api/render/bgmusic/tracks");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setBgTrackCount(data.count);
+    } catch {
+      setBgTrackCount(0);
+    }
+  };
+
+  useEffect(() => { fetchBgTracks(); }, []);
 
   const save = () => {
     saveProviderSettings(settings);
@@ -571,6 +586,61 @@ export default function Settings() {
                 <p className="text-xs text-muted-foreground">
                   Ambient audio from the Veo video mixed quietly under the narrator. Set to 0% to silence it. Default: 3%.
                 </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-display">Background Music</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium text-foreground">Enable Background Music</label>
+                  <p className="text-xs text-muted-foreground">Mix a random track from the bg_music/ folder into the final video</p>
+                </div>
+                <Switch
+                  checked={settings.bgMusicEnabled ?? true}
+                  onCheckedChange={(checked) => setSettings(s => ({ ...s, bgMusicEnabled: checked }))}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  Music Volume: {Math.round((settings.bgMusicVolume ?? 0.10) * 100)}%
+                </label>
+                <Slider
+                  value={[settings.bgMusicVolume ?? 0.10]}
+                  onValueChange={([v]) => setSettings(s => ({ ...s, bgMusicVolume: v }))}
+                  min={0.0} max={1.0} step={0.01}
+                  disabled={!(settings.bgMusicEnabled ?? true)}
+                />
+                <p className="text-xs text-muted-foreground">Volume of the background track under the narration. Default: 10%.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">
+                  Narration Volume: {Math.round((settings.narrationVolume ?? 2.0) * 100)}%
+                </label>
+                <Slider
+                  value={[settings.narrationVolume ?? 2.0]}
+                  onValueChange={([v]) => setSettings(s => ({ ...s, narrationVolume: v }))}
+                  min={0.5} max={3.0} step={0.1}
+                  disabled={!(settings.bgMusicEnabled ?? true)}
+                />
+                <p className="text-xs text-muted-foreground">Boost applied to the narrator audio when music is mixed in. Default: 200%.</p>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <p className="text-xs text-muted-foreground">
+                  {bgTrackCount === null
+                    ? "Checking bg_music/ folder…"
+                    : `${bgTrackCount} track${bgTrackCount === 1 ? "" : "s"} in bg_music/ — picks one at random per render`}
+                </p>
+                <Button variant="ghost" size="sm" className="text-xs h-7" onClick={fetchBgTracks}>
+                  <RefreshCw className="h-3 w-3 mr-1" />Refresh
+                </Button>
               </div>
             </CardContent>
           </Card>
