@@ -692,10 +692,13 @@ export async function startRender(projectId: string, resolution: VideoResolution
   const overlayFont = settings.overlayFont ?? "Tox Typewriter";
   const overlayFontSize = settings.overlayFontSize ?? 36;
   const veoAudioVolume = settings.veoAudioVolume ?? 0.03;
+  const bgMusicEnabled = settings.bgMusicEnabled ?? true;
+  const bgMusicVolume = settings.bgMusicVolume ?? 0.10;
+  const narrationVolume = settings.narrationVolume ?? 2.0;
   return apiRequest(`/render/${projectId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume }),
+    body: JSON.stringify({ resolution, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume, bgMusicEnabled, bgMusicVolume, narrationVolume }),
   });
 }
 
