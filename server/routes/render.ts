@@ -7,6 +7,7 @@ import fs from "fs";
 import { execSync, spawn } from "child_process";
 import archiver from "archiver";
 import { generateVeoClip } from "../lib/veo.js";
+import { scanBgMusicTracks, BG_MUSIC_DIR } from "../lib/bgMusic.js";
 
 const router = express.Router();
 
@@ -558,6 +559,12 @@ router.get("/failures", async (req: Request, res: Response) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+/** GET /api/render/bgmusic/tracks — list available background-music files */
+router.get("/bgmusic/tracks", (_req: Request, res: Response) => {
+  const files = scanBgMusicTracks(BG_MUSIC_DIR).map(p => path.basename(p));
+  res.json({ count: files.length, files });
 });
 
 /**
