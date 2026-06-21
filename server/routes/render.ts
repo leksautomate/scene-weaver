@@ -823,11 +823,14 @@ router.post("/:id/auto", async (req: Request, res: Response) => {
   const overlayFont = req.body?.overlayFont || "Tox Typewriter";
   const overlayFontSize = req.body?.overlayFontSize !== undefined ? parseInt(req.body.overlayFontSize, 10) : 36;
   const autoVeoAudioVolume = req.body?.veoAudioVolume !== undefined ? parseFloat(req.body.veoAudioVolume) : 0.1;
+  const autoBgMusicEnabled = req.body?.bgMusicEnabled !== undefined ? !!req.body.bgMusicEnabled : true;
+  const autoNarrationVolume = req.body?.narrationVolume !== undefined ? parseFloat(req.body.narrationVolume) : 2.0;
+  const autoBgMusicVolume = req.body?.bgMusicVolume !== undefined ? parseFloat(req.body.bgMusicVolume) : 0.10;
   const [autoProject] = await db.select().from(projects).where(eq(projects.id, projectId));
   const autoProjectAR: string = (autoProject?.settings as any)?.aspectRatio || "16:9";
   await upsertJobStatus(projectId, "auto", "running", { resolution: resKey });
   res.json({ success: true, message: "Auto pipeline started in background" });
-  runAutoPipeline(projectId, resKey, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, autoProjectAR, autoVeoAudioVolume).catch(e => {
+  runAutoPipeline(projectId, resKey, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, autoProjectAR, autoVeoAudioVolume, autoBgMusicEnabled, autoNarrationVolume, autoBgMusicVolume).catch(e => {
     console.error(`[auto] ${projectId} failed:`, e.message);
     if (autoJobs[projectId]) autoJobs[projectId] = { ...autoJobs[projectId], status: "failed", error: e.message };
     upsertJobStatus(projectId, "auto", "failed", { error: e.message });
@@ -889,12 +892,15 @@ router.post("/:id", async (req: Request, res: Response) => {
     const overlayFont = req.body?.overlayFont || "Tox Typewriter";
     const overlayFontSize = req.body?.overlayFontSize !== undefined ? parseInt(req.body.overlayFontSize, 10) : 36;
     const mergeVeoAudioVolume = req.body?.veoAudioVolume !== undefined ? parseFloat(req.body.veoAudioVolume) : 0.1;
+    const bgMusicEnabled = req.body?.bgMusicEnabled !== undefined ? !!req.body.bgMusicEnabled : true;
+    const narrationVolume = req.body?.narrationVolume !== undefined ? parseFloat(req.body.narrationVolume) : 2.0;
+    const bgMusicVolume = req.body?.bgMusicVolume !== undefined ? parseFloat(req.body.bgMusicVolume) : 0.10;
 
     mergeJobs[projectId] = { status: "rendering", progress: 0, total: ready.length, resolution: resKey };
     await upsertJobStatus(projectId, "merge", "running", { resolution: resKey, total: ready.length });
     res.json({ success: true, total: ready.length, resolution: resKey });
 
-    mergeVideo(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, mergeVeoAudioVolume).catch(e => {
+    mergeVideo(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, mergeVeoAudioVolume, bgMusicEnabled, narrationVolume, bgMusicVolume).catch(e => {
       console.error(`[merge] ${projectId} failed:`, e.message);
       mergeJobs[projectId] = { ...mergeJobs[projectId], status: "failed", error: e.message };
       upsertJobStatus(projectId, "merge", "failed", { error: e.message });
@@ -1346,7 +1352,10 @@ async function mergeVideo(
   overlayPosition = "bottom-left",
   overlayFont = "Tox Typewriter",
   overlayFontSize = 36,
-  veoAudioVolume = 0.03
+  veoAudioVolume = 0.03,
+  bgMusicEnabled = true,
+  narrationVolume = 2.0,
+  bgMusicVolume = 0.10
 ) {
   const clipsDir = path.join("uploads", projectId, "clips");
   const renderDir = path.join("uploads", projectId, "render");
@@ -1493,6 +1502,14 @@ async function mergeVideo(
 
   // Pre-generated and regenerated clips are stored persistently in clipsDir. No tempClips to clean up.
 
+  if (bgMusicEnabled) {
+    try {
+      await applyBgMusic(outPath, narrationVolume, bgMusicVolume);
+    } catch (e: any) {
+      console.error(`[bgmusic] ${projectId}: mixing failed, keeping music-free output:`, e.message);
+    }
+  }
+
   mergeJobs[projectId] = { status: "done", progress: 100, total: sceneList.length, resolution: mergeJobs[projectId].resolution };
   await upsertJobStatus(projectId, "merge", "done", { total: sceneList.length });
   console.log(`[merge] ${projectId}: done → ${outPath}`);
@@ -1552,7 +1569,10 @@ async function runAutoPipeline(
   overlayFont = "Tox Typewriter",
   overlayFontSize = 36,
   aspectRatio = "16:9",
-  veoAudioVolume = 0.03
+  veoAudioVolume = 0.03,
+  bgMusicEnabled = true,
+  narrationVolume = 2.0,
+  bgMusicVolume = 0.10
 ) {
   const [W, H] = resolveOutputSize(resKey, aspectRatio);
   autoJobs[projectId] = { status: "waiting_assets", resolution: resKey };
@@ -1592,7 +1612,7 @@ async function runAutoPipeline(
   console.log(`[auto] ${projectId}: clips done → merging`);
   autoJobs[projectId].status = "merging";
   mergeJobs[projectId] = { status: "rendering", progress: 0, total: ready.length, resolution: resKey };
-  await mergeVideo(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume);
+  await mergeVideo(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume, bgMusicEnabled, narrationVolume, bgMusicVolume);
 
   autoJobs[projectId].status = "done";
   await upsertJobStatus(projectId, "auto", "done");
