@@ -46,3 +46,29 @@ describe("inworld settings", () => {
     expect(loaded.textProvider).toBe("inworld");
   });
 });
+
+describe("background music settings", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("has correct defaults when no settings saved", () => {
+    const settings = loadProviderSettings();
+    expect(settings.bgMusicEnabled).toBe(true);
+    expect(settings.bgMusicVolume).toBe(0.10);
+    expect(settings.narrationVolume).toBe(2.0);
+  });
+
+  it("persists background music settings when saved", () => {
+    saveProviderSettings({
+      ...loadProviderSettings(),
+      bgMusicEnabled: false,
+      bgMusicVolume: 0.25,
+      narrationVolume: 1.5,
+    });
+    const loaded = loadProviderSettings();
+    expect(loaded.bgMusicEnabled).toBe(false);
+    expect(loaded.bgMusicVolume).toBe(0.25);
+    expect(loaded.narrationVolume).toBe(1.5);
+  });
+});

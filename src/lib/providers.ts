@@ -58,6 +58,9 @@ export interface ProviderSettings {
   overlayFont?: string;
   overlayFontSize?: number;
   veoAudioVolume?: number;
+  bgMusicEnabled?: boolean;
+  bgMusicVolume?: number;
+  narrationVolume?: number;
 }
 
 export const IMAGE_MODELS = [
@@ -131,6 +134,9 @@ const DEFAULTS: ProviderSettings = {
   overlayFont: "Tox Typewriter",
   overlayFontSize: 36,
   veoAudioVolume: 0.03,
+  bgMusicEnabled: true,
+  bgMusicVolume: 0.10,
+  narrationVolume: 2.0,
 };
 
 export function loadProviderSettings(): ProviderSettings {
