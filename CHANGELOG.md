@@ -2,6 +2,18 @@
 
 All notable changes to Historia are documented here.
 
+## [1.1.5] — 2026-07-01
+
+### Fixed
+- **Script → JSON: Duration Setting Ignored During Scene Splitting**:
+  - Pass 1 only handed the LLM a soft "~X words per scene" hint alongside competing narrative-beat splitting rules, so changing the 10s/15s/20s/30s duration selector had little to no effect on the actual scene lengths.
+  - Added `rebalanceScenesByDuration` (`shared/scriptToJsonUtils.ts`), a deterministic post-process step run after Pass 1 completes: scenes far over the target word count are split at sentence boundaries, and consecutive scenes under target are merged forward, guaranteeing the duration setting is actually respected.
+- **Script → JSON: 70/30 Narrative/Infographic Ratio Not Enforced**:
+  - The Pass 2 system prompts stated a "strict 70/30" narrative-to-infographic image distribution, but this was never enforced — the LLM defaulted to narrative illustrations almost every time.
+  - Added `assignVisualTypes` (`shared/scriptToJsonUtils.ts`), which deterministically and evenly labels ~30% of scenes across the whole video (not per-batch) as `INFOGRAPHIC` and the rest `NARRATIVE`. Each scene sent to Pass 2 is now tagged with its mandatory visual type, and both `PASS2_IMPASTO_SYSTEM` and `PASS2_WWII_SYSTEM` were updated to require the tag be followed exactly rather than left to the model's judgment.
+
+---
+
 ## [1.1.4] — 2026-06-03
 
 ### Added
