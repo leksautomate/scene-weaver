@@ -120,6 +120,102 @@ export function chunkScript(text: string, maxWords: number): string[] {
   return chunks;
 }
 
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
+
+function splitIntoSentences(text: string): string[] {
+  const matched = text.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [];
+  const coveredLength = matched.reduce((sum, s) => sum + s.length, 0);
+  const trailing = text.slice(coveredLength).trim();
+  const sentences = matched.map((s) => s.trim());
+  if (trailing) sentences.push(trailing);
+  return sentences.length > 0 ? sentences : [text.trim()];
+}
+
+// Pass 1 asks the LLM to target ~wordsPerScene words per scene, but models
+// tend to favor narrative-beat splits over the word target. This deterministically
+// enforces the duration setting after the fact: scenes far over target are split at
+// sentence boundaries, and consecutive short scenes are merged toward the target.
+export function rebalanceScenesByDuration(
+  scenes: SplitScene[],
+  wordsPerScene: number
+): SplitScene[] {
+  if (scenes.length === 0) return scenes;
+
+  const maxWords = Math.round(wordsPerScene * 1.5);
+  const minWords = Math.round(wordsPerScene * 0.55);
+
+  type Unit = { script: string; overlay_text: SplitScene["overlay_text"] };
+
+  // Step 1: split scenes far longer than target, only at sentence boundaries.
+  const units: Unit[] = [];
+  for (const scene of scenes) {
+    if (countWords(scene.script) <= maxWords) {
+      units.push({ script: scene.script, overlay_text: scene.overlay_text });
+      continue;
+    }
+    const sentences = splitIntoSentences(scene.script);
+    let buffer: string[] = [];
+    let bufferWords = 0;
+    let isFirstPiece = true;
+    for (const sentence of sentences) {
+      const sentenceWords = countWords(sentence);
+      if (bufferWords > 0 && bufferWords + sentenceWords > maxWords) {
+        units.push({ script: buffer.join(" "), overlay_text: isFirstPiece ? scene.overlay_text : null });
+        isFirstPiece = false;
+        buffer = [];
+        bufferWords = 0;
+      }
+      buffer.push(sentence);
+      bufferWords += sentenceWords;
+    }
+    if (buffer.length > 0) {
+      units.push({ script: buffer.join(" "), overlay_text: isFirstPiece ? scene.overlay_text : null });
+    }
+  }
+
+  // Step 2: greedily merge consecutive scenes that are under target toward it.
+  const merged: Unit[] = [];
+  for (const unit of units) {
+    const prev = merged[merged.length - 1];
+    const unitWords = countWords(unit.script);
+    if (prev) {
+      const prevWords = countWords(prev.script);
+      if (prevWords < minWords && prevWords + unitWords <= maxWords) {
+        prev.script = `${prev.script} ${unit.script}`.trim();
+        prev.overlay_text = prev.overlay_text ?? unit.overlay_text;
+        continue;
+      }
+    }
+    merged.push({ ...unit });
+  }
+
+  return merged.map((u, idx) => ({
+    id: scenes[0].id + idx,
+    script: u.script,
+    overlay_text: u.overlay_text,
+  }));
+}
+
+export type VisualType = "narrative" | "infographic";
+
+// The Pass 2 system prompts describe a 70/30 narrative/infographic split, but left to
+// its own judgment the LLM almost always picks narrative for every scene. This assigns
+// the ratio deterministically and evenly across the whole video (not per-batch, so the
+// ratio holds even when scenes are split across many Pass 2 requests), then each scene
+// is tagged with its assignment before being sent to the LLM.
+export function assignVisualTypes(count: number, infographicRatio = 0.3): VisualType[] {
+  const types: VisualType[] = [];
+  for (let i = 0; i < count; i++) {
+    const before = Math.floor(i * infographicRatio);
+    const after = Math.floor((i + 1) * infographicRatio);
+    types.push(after > before ? "infographic" : "narrative");
+  }
+  return types;
+}
+
 export function tryParseTruncatedJson(text: string): any {
   let inString = false;
   let stringChar = '';
@@ -585,7 +681,9 @@ Each image prompt must follow the narration — not random — it must follow th
 1. VISUAL AESTHETIC
 All imagery must be rendered as Contemporary Digital Oil Painting with heavy Impasto texture. Brushstrokes must be visible throughout, especially in smoke, water, and sky. Apply Chiaroscuro lighting with dramatic contrast between deep shadow and focal highlights on faces, armor, and weapons. Black powder smoke must appear as a recurring visual element, framing scenes and creating atmospheric depth. All historical figures must be modeled after authenticated contemporary portraits but rendered with modern cinematic expressiveness.
 
-Follow a strict 70/30 visual distribution: 70% narrative illustrations including action shots, character portraits, and battlefield landscapes; 30% maps, infographics, and diagrams for strategic and historical data.
+Each scene below is pre-tagged "[NARRATIVE]" or "[INFOGRAPHIC]" — this tag is MANDATORY, not a suggestion you can override based on the narration content. It already enforces the required 70/30 distribution across the whole video, so never re-balance it yourself and never relabel a scene:
+- [NARRATIVE] → action shots, character portraits, battlefield landscapes (section 1 above)
+- [INFOGRAPHIC] → maps, diagrams, strategic/historical data (section 2 below) — even if the narration text for that scene doesn't obviously describe a map or chart, invent one that fits the moment (a map of the region, a force-composition diagram, a casualty/timeline chart, etc.)
 
 2. INFORMATIONAL ASSET DESIGN
 All maps must use a Tactical Parchment style: aged tea-stained background with visible creases, hand-drawn cartographic coastlines, decorative compass roses, calligraphic place names. Tactical route arrows must appear on all movement maps — use bold, color-coded hand-drawn arrows in period cartographic style to show force movements (e.g., blue/gold for the protagonist force, red/crimson for the opposing force), with arrowheads and movement labels clearly distinguishing each army's advance, retreat, or encirclement.
@@ -634,6 +732,10 @@ Each image prompt must follow the narration — not random — it must follow th
 
 1. VISUAL AESTHETIC
 All imagery must be rendered as WWII Archival Photorealism — ultra-realistic, cinematic black-and-white war photojournalism. Every image must feel like an authentic recovered wartime photograph: emotionally raw, historically accurate, and documentary in nature. Apply dramatic chiaroscuro lighting with deep shadows and sharp focal highlights on faces, uniforms, weapons, and machinery. All images must simulate 35mm film grain using textures consistent with Kodak Tri-X film stock. Apply shallow depth of field where the foreground subject is razor-sharp and the background dissolves into grain and smoke. Smoke, mud, rain, fire, and atmospheric battlefield haze must appear as recurring visual elements creating depth and tension. All figures must feature hyper-detailed period-accurate textures: authentic wool military uniforms, wet leather, rusted steel, canvas webbing, and weathered skin with visible emotional expression. The overall aesthetic must feel like a masterpiece-quality wartime press photograph — grave, cinematic, historically immersive.
+
+Each scene below is pre-tagged "[NARRATIVE]" or "[INFOGRAPHIC]" — this tag is MANDATORY, not a suggestion you can override based on the narration content. It already enforces the required 70/30 distribution across the whole video, so never re-balance it yourself and never relabel a scene:
+- [NARRATIVE] → archival-style combat/portrait photographs (section 1 above)
+- [INFOGRAPHIC] → maps, diagrams, strategic/historical data (section 2 below) — even if the narration text for that scene doesn't obviously describe a map or chart, invent one that fits the moment (a map of the region, a force-composition diagram, a casualty/timeline chart, etc.)
 
 2. INFORMATIONAL ASSET DESIGN
 All maps must use an Aged Wartime Document style: yellowed or tea-stained paper with visible fold creases, water damage, and foxing spots. Terrain rendered in hand-drafted 1940s military cartographic style with contour lines, river crossings, and village names in vintage serif type. Stamps such as "CLASSIFIED," "TOP SECRET," or operation names in faded block type. Typewritten annotations for dates and unit labels. Tactical arrows in deep charcoal for Allied forces and dense gray hatching lines for Axis forces — bold, hand-drafted directional arrows showing advance routes, pincer movements, and retreats.

@@ -16,6 +16,9 @@ import {
   recoverPromptsRegex,
   buildContinuityAnchor,
   buildPass1SystemPrompt,
+  rebalanceScenesByDuration,
+  assignVisualTypes,
+  type VisualType,
   PASS2_IMPASTO_SYSTEM,
   PASS2_WWII_SYSTEM,
   getGroqModelConfig,
@@ -384,6 +387,7 @@ async function callPass1(
 async function callPass2Batch(
   title: string,
   scenes: SplitScene[],
+  visualTypes: VisualType[],
   style: "impasto" | "ww2",
   provider: "groq" | "inworld" | "claude" | "gemini",
   apiKey: string,
@@ -401,7 +405,9 @@ async function callPass2Batch(
     : baseSystem;
   const systemPrompt = continuityAnchor ? `${systemPromptPrompt}\n\n${continuityAnchor}` : systemPromptPrompt;
 
-  const scenesText = scenes.map((s) => `Scene ${s.id}: "${s.script}"`).join("\n");
+  const scenesText = scenes
+    .map((s, i) => `Scene ${s.id} [${visualTypes[i].toUpperCase()}]: "${s.script}"`)
+    .join("\n");
   const userPrompt = `Documentary title: "${title}"\n\nGenerate ONE image prompt for each scene below. Return ONLY the JSON object.\n\n${scenesText}`;
 
   const groqConfig = getGroqModelConfig(groqModel || "llama-3.3-70b-versatile");
@@ -475,7 +481,7 @@ async function callPass2Batch(
       const waitTime = (4 - rateLimitRetries) * baseWait;
       console.log(`[${provider}] Pass2 rate limited or transient error (${result.status}) — waiting ${waitTime / 1000}s (attempts left: ${rateLimitRetries})...`);
       await delay(waitTime);
-      return callPass2Batch(title, scenes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries - 1, retryOnParseFailure, geminiModel, stylePrompt);
+      return callPass2Batch(title, scenes, visualTypes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries - 1, retryOnParseFailure, geminiModel, stylePrompt);
     }
     if (result.status === 401)
       throw new Error(`${provider === "groq" ? "Groq" : provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : "Inworld"} API key is invalid.`);
@@ -518,7 +524,7 @@ async function callPass2Batch(
     }
     if (retryOnParseFailure) {
       console.warn(`[${provider}] Pass2 JSON parse failed — retrying`);
-      return callPass2Batch(title, scenes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries, false, geminiModel, stylePrompt);
+      return callPass2Batch(title, scenes, visualTypes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries, false, geminiModel, stylePrompt);
     }
     console.error(`[${provider}] Pass2 JSON parse failed twice — using placeholders. Error: ${err.message}`);
     return scenes.map((s) => ({ id: s.id, prompt: "[generation failed]" }));
@@ -612,9 +618,12 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
 
     if (allSplitScenes.length === 0) throw new Error("No scenes were generated from the script");
 
+    const rebalancedScenes = rebalanceScenesByDuration(allSplitScenes, wordsPerScene);
+    const visualTypes = assignVisualTypes(rebalancedScenes.length);
+
     // Pass 2
-    const totalBatches = Math.ceil(allSplitScenes.length / batchSize);
-    job.progress = { phase: "pass2", done: 0, total: allSplitScenes.length };
+    const totalBatches = Math.ceil(rebalancedScenes.length / batchSize);
+    job.progress = { phase: "pass2", done: 0, total: rebalancedScenes.length };
     saveJobsToDisk();
 
     const promptMap = new Map<number, string>();
@@ -630,9 +639,10 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
         else if (provider === "inworld") waitMs = 3000;
         await delay(waitMs);
       }
-      const batch = allSplitScenes.slice(b * batchSize, (b + 1) * batchSize);
+      const batch = rebalancedScenes.slice(b * batchSize, (b + 1) * batchSize);
+      const batchVisualTypes = visualTypes.slice(b * batchSize, (b + 1) * batchSize);
       const anchor = buildContinuityAnchor(completedForAnchor);
-      const results = await withGroqRotation(key => callPass2Batch(title, batch, style, provider, key, anchor, claudeModel, groqModel, 3, true, geminiModel, stylePrompt));
+      const results = await withGroqRotation(key => callPass2Batch(title, batch, batchVisualTypes, style, provider, key, anchor, claudeModel, groqModel, 3, true, geminiModel, stylePrompt));
 
       for (const r of results) {
         const idVal = r.id ?? r.scene_number ?? (r as any).sceneNumber ?? (r as any).scene_id ?? (r as any).scene_Id;
@@ -645,8 +655,8 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
         completedForAnchor.push({ script: scene.script, prompt: promptMap.get(scene.id) ?? "[generation failed]" });
       }
 
-      const doneSoFar = Math.min((b + 1) * batchSize, allSplitScenes.length);
-      const partialScenes: OutputScene[] = allSplitScenes
+      const doneSoFar = Math.min((b + 1) * batchSize, rebalancedScenes.length);
+      const partialScenes: OutputScene[] = rebalancedScenes
         .filter((s) => promptMap.has(s.id))
         .map((s) => ({
           image: `${s.id}.png`,
@@ -654,11 +664,11 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
           prompt: promptMap.get(s.id)!,
           overlay_text: s.overlay_text,
         }));
-      job.progress = { phase: "pass2", done: doneSoFar, total: allSplitScenes.length, partialScenes };
+      job.progress = { phase: "pass2", done: doneSoFar, total: rebalancedScenes.length, partialScenes };
       saveJobsToDisk();
     }
 
-    const scenes: OutputScene[] = allSplitScenes.map((s) => ({
+    const scenes: OutputScene[] = rebalancedScenes.map((s) => ({
       image: `${s.id}.png`,
       script: s.script,
       prompt: promptMap.get(s.id) ?? "[generation failed]",
