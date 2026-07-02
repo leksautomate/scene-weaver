@@ -2,6 +2,16 @@
 
 All notable changes to Historia are documented here.
 
+## [1.1.6] — 2026-07-02
+
+### Fixed
+- **Script → JSON: Orphaned Short Scenes After Duration Rebalancing**:
+  - `rebalanceScenesByDuration`'s merge pass only checked whether the *previous* scene was under the target word count, so a short scene landing right after an already-adequately-sized neighbor (or as the very last scene overall) was never considered for merging and shipped as its own scene — sometimes as short as 6 words.
+  - The merge condition now triggers when *either* neighbor is under target, so short scenes get folded into a comfortable neighbor instead of being skipped.
+  - Added a final safety-net pass that catches any scene still under target after the main merge (both neighbors already near the word cap) and merges it into whichever neighbor stays closer to target, even if that neighbor ends up slightly over the cap — preferable to a lone few-word scene becoming its own video clip.
+
+---
+
 ## [1.1.5] — 2026-07-01
 
 ### Fixed

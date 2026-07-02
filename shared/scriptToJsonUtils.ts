@@ -177,19 +177,48 @@ export function rebalanceScenesByDuration(
   }
 
   // Step 2: greedily merge consecutive scenes that are under target toward it.
+  // Triggers on either side being short, not just `prev` — otherwise a short unit
+  // that lands right after an already-comfortable prev is never even considered
+  // for merging and is stranded as a permanent orphan.
   const merged: Unit[] = [];
   for (const unit of units) {
     const prev = merged[merged.length - 1];
     const unitWords = countWords(unit.script);
     if (prev) {
       const prevWords = countWords(prev.script);
-      if (prevWords < minWords && prevWords + unitWords <= maxWords) {
+      if (
+        (prevWords < minWords || unitWords < minWords) &&
+        prevWords + unitWords <= maxWords
+      ) {
         prev.script = `${prev.script} ${unit.script}`.trim();
         prev.overlay_text = prev.overlay_text ?? unit.overlay_text;
         continue;
       }
     }
     merged.push({ ...unit });
+  }
+
+  // Step 3: safety net for leftover orphans — a short unit whose neighbors were
+  // already too close to the cap to absorb it in Step 2. Merge it into whichever
+  // neighbor keeps the combined total lower, even if that slightly exceeds
+  // maxWords: a marginally long scene is a smaller problem than a lone
+  // few-word scene rendered as its own clip.
+  for (let i = merged.length - 1; i >= 0; i--) {
+    if (countWords(merged[i].script) >= minWords) continue;
+    const prev = i > 0 ? merged[i - 1] : null;
+    const next = i < merged.length - 1 ? merged[i + 1] : null;
+    if (!prev && !next) continue;
+    const prevWords = prev ? countWords(prev.script) : Infinity;
+    const nextWords = next ? countWords(next.script) : Infinity;
+    const mergeInto = prevWords <= nextWords ? "prev" : "next";
+    if (mergeInto === "prev" && prev) {
+      prev.script = `${prev.script} ${merged[i].script}`.trim();
+      prev.overlay_text = prev.overlay_text ?? merged[i].overlay_text;
+    } else if (next) {
+      next.script = `${merged[i].script} ${next.script}`.trim();
+      next.overlay_text = merged[i].overlay_text ?? next.overlay_text;
+    }
+    merged.splice(i, 1);
   }
 
   return merged.map((u, idx) => ({
