@@ -70,7 +70,7 @@ export function getGroqModelConfig(modelId: string): GroqModelConfig {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const WORDS_PER_MINUTE = 117;
+export const WORDS_PER_MINUTE = 130;
 export const PASS1_CHUNK_MAX_WORDS = 2000;
 export const GROQ_BATCH_SIZE = 8;
 export const INWORLD_BATCH_SIZE = 15;
@@ -673,6 +673,7 @@ SPLITTING RULES:
 - Target ~${wordsPerScene} words per scene (${secondsPerScene}s at documentary pace)
 - Split at: visual transitions, narrative beats, emotional shifts, location/time changes
 - Each scene = one distinct visual idea. Never split mid-sentence.
+- Never and ever remove or add  to the script .
 - Continue scene numbering from id ${startId}
 
 OVERLAY TEXT RULES:
