@@ -134,6 +134,56 @@ function splitIntoSentences(text: string): string[] {
   return sentences.length > 0 ? sentences : [text.trim()];
 }
 
+export function splitScriptByDuration(
+  script: string,
+  secondsPerScene: number
+): SplitScene[] {
+  const wordsPerScene = Math.floor((WORDS_PER_MINUTE * secondsPerScene) / 60);
+  const maxWords = Math.round(wordsPerScene * 1.5);
+
+  const sentences = splitIntoSentences(script);
+  const scenes: SplitScene[] = [];
+  let sceneId = 1;
+  let currentSentences: string[] = [];
+  let currentWords = 0;
+
+  for (const sentence of sentences) {
+    const wordCount = sentence.trim().split(/\s+/).filter(Boolean).length;
+    if (currentWords > 0 && currentWords + wordCount > maxWords) {
+      scenes.push({
+        id: sceneId++,
+        script: currentSentences.join(" ").trim(),
+        overlay_text: null,
+      });
+      currentSentences = [sentence];
+      currentWords = wordCount;
+    } else {
+      currentSentences.push(sentence);
+      currentWords += wordCount;
+      if (currentWords >= wordsPerScene) {
+        scenes.push({
+          id: sceneId++,
+          script: currentSentences.join(" ").trim(),
+          overlay_text: null,
+        });
+        currentSentences = [];
+        currentWords = 0;
+      }
+    }
+  }
+  if (currentSentences.length > 0) {
+    const text = currentSentences.join(" ").trim();
+    if (text) {
+      scenes.push({
+        id: sceneId++,
+        script: text,
+        overlay_text: null,
+      });
+    }
+  }
+  return scenes.length > 0 ? scenes : [{ id: 1, script: script.trim(), overlay_text: null }];
+}
+
 // Pass 1 asks the LLM to target ~wordsPerScene words per scene, but models
 // tend to favor narrative-beat splits over the word target. This deterministically
 // enforces the duration setting after the fact: scenes far over target are split at
@@ -589,9 +639,9 @@ export function recoverScenesRegex(text: string): SplitScene[] {
   return scenes;
 }
 
-export function recoverPromptsRegex(text: string): Array<{ id: number; prompt: string }> {
+export function recoverPromptsRegex(text: string): Array<{ id: number; prompt: string; overlay_text?: any }> {
   if (typeof text !== 'string') return [];
-  const prompts: Array<{ id: number; prompt: string }> = [];
+  const prompts: Array<{ id: number; prompt: string; overlay_text?: any }> = [];
   try {
     const rawObjs = extractLooseObjects(text);
     const objs: any[] = [];
@@ -608,7 +658,9 @@ export function recoverPromptsRegex(text: string): Array<{ id: number; prompt: s
       const prompt = obj.prompt ?? obj.image_prompt ?? obj.description ?? obj.imagePrompt;
       if (typeof prompt !== 'string') continue;
 
-      prompts.push({ id, prompt: prompt.trim() });
+      const overlay_text = _cleanOverlay(obj.overlay_text ?? obj.overlayText ?? obj.overlay ?? null);
+
+      prompts.push({ id, prompt: prompt.trim(), overlay_text });
     }
 
     // Resilient fallback: parse plain-text lists if no JSON objects were recovered
@@ -625,7 +677,7 @@ export function recoverPromptsRegex(text: string): Array<{ id: number; prompt: s
         let prompt = match[2].trim();
         prompt = prompt.replace(/[-*•\s]+$/, "").trim();
         if (prompt && !isNaN(id)) {
-          prompts.push({ id, prompt });
+          prompts.push({ id, prompt, overlay_text: null });
         }
       }
 
@@ -637,7 +689,7 @@ export function recoverPromptsRegex(text: string): Array<{ id: number; prompt: s
           let prompt = match[2].trim();
           prompt = prompt.replace(/[-*•\s]+$/, "").trim();
           if (prompt && !isNaN(id)) {
-            prompts.push({ id, prompt });
+            prompts.push({ id, prompt, overlay_text: null });
           }
         }
       }
@@ -753,8 +805,32 @@ Digital oil painting, visible brushwork throughout. Mid-shot of Alexander of Mac
 Example 4 (Illustration - Establishing Shot):
 Digital oil painting, panoramic establishing shot from the Macedonian bank looking east. The Granicus River in full turbulent spring flow, rendered in thick impasto white-capped brushstrokes. The eastern bank rises steeply in shadow, brown clay and dark mud. Above the bank on high ground, the Persian cavalry formation fills the ridge from left to right of frame. Persian banners in crimson and gold are barely distinguishable through dust haze. The sky above is a dramatic chiaroscuro: deep orange and black from the west. Scale deliberately overwhelming.
 
+OVERLAY TEXT RULES:
+Overlays increase understanding and emotion — must NOT repeat narration.
+STRICT MAX 3 WORDS per label. Plain text only — no markdown, no asterisks, no hashtags, no symbols.
+
+TWO FORMATS — choose based on the scene:
+
+1. SIMPLE (one key fact) → plain string:
+   "June 1944"
+
+2. COMPLEX (scene narrates a list of units/forces/names/numbers) → array of objects:
+   Each object: {"text": "label max 3 words", "trigger": "oneword"}
+   - "trigger" = the EXACT single word spoken in the narration that fires this overlay
+   - trigger must appear verbatim in the script field
+   - Max 6 items per array
+
+Example for "the Seventeenth, Eighteenth, and Nineteenth Legions, six auxiliary cohorts, three squadrons of cavalry":
+[{"text":"XVII Legion","trigger":"Seventeenth"},{"text":"XVIII Legion","trigger":"Eighteenth"},{"text":"XIX Legion","trigger":"Nineteenth"},{"text":"6 Cohorts","trigger":"six"},{"text":"3 Cavalry","trigger":"three"}]
+
+Overlay types (pick most impactful):
+DATE "476 AD" | LOCATION "Normandy" | FORCE SIZE "39 Australians" | CASUALTIES "8000 Killed"
+COMMANDER "Erwin Rommel" | STRATEGIC FACT "Outnumbered 50:1" | STATUS "Final Assault" | OUTCOME "Allied Victory"
+
+Use plain digits — no commas: 25000 not 25,000. Set null if nothing meaningful.
+
 Return ONLY valid JSON:
-{"scenes":[{"id":1,"image_prompt":"Full cinematic prompt here, 5–7 sentences."},{"id":2,"image_prompt":"..."}]}`;
+{"scenes":[{"id":1,"image_prompt":"Full cinematic prompt here, 5–7 sentences.","overlay_text":"June 1944"},{"id":2,"image_prompt":"...","overlay_text":[{"text":"XVII Legion","trigger":"Seventeenth"}]}]}`;
 
 export const PASS2_WWII_SYSTEM = `You are the Lead Creative Director and Historical Consultant for a high-end educational documentary series. You produce historical videos exploring World War II warfare through a human-centered tactical lens.
 
@@ -805,6 +881,30 @@ Ultra-realistic WWII archival photograph, cinematic black-and-white war photojou
 Example 5 (Photograph - Tank & Infantry):
 Ultra-realistic WWII archival photograph, cinematic black-and-white combat photojournalism, 1943. Low-angle shot of a German Panzer IV tank grinding forward through a muddy Eastern Front field, exhaust smoke rising in dark columns against a flat winter sky. A Wehrmacht soldier in a greatcoat and steel helmet crouches in the foreground beside a shattered fence post. Deep chiaroscuro — the tank hull catches a sharp strip of cold light against vast surrounding shadow. Hyper-detailed texture on riveted steel plating, worn boot leather, and frozen mud. Subtle Kodak Tri-X film grain. Cinematic, grave, utterly documentary. Masterpiece quality.
 
+OVERLAY TEXT RULES:
+Overlays increase understanding and emotion — must NOT repeat narration.
+STRICT MAX 3 WORDS per label. Plain text only — no markdown, no asterisks, no hashtags, no symbols.
+
+TWO FORMATS — choose based on the scene:
+
+1. SIMPLE (one key fact) → plain string:
+   "June 1944"
+
+2. COMPLEX (scene narrates a list of units/forces/names/numbers) → array of objects:
+   Each object: {"text": "label max 3 words", "trigger": "oneword"}
+   - "trigger" = the EXACT single word spoken in the narration that fires this overlay
+   - trigger must appear verbatim in the script field
+   - Max 6 items per array
+
+Example for "the Seventeenth, Eighteenth, and Nineteenth Legions, six auxiliary cohorts, three squadrons of cavalry":
+[{"text":"XVII Legion","trigger":"Seventeenth"},{"text":"XVIII Legion","trigger":"Eighteenth"},{"text":"XIX Legion","trigger":"Nineteenth"},{"text":"6 Cohorts","trigger":"six"},{"text":"3 Cavalry","trigger":"three"}]
+
+Overlay types (pick most impactful):
+DATE "476 AD" | LOCATION "Normandy" | FORCE SIZE "39 Australians" | CASUALTIES "8000 Killed"
+COMMANDER "Erwin Rommel" | STRATEGIC FACT "Outnumbered 50:1" | STATUS "Final Assault" | OUTCOME "Allied Victory"
+
+Use plain digits — no commas: 25000 not 25,000. Set null if nothing meaningful.
+
 Return ONLY valid JSON:
-{"scenes":[{"id":1,"image_prompt":"Full cinematic prompt here, 5–7 sentences."},{"id":2,"image_prompt":"..."}]}`;
+{"scenes":[{"id":1,"image_prompt":"Full cinematic prompt here, 5–7 sentences.","overlay_text":"June 1944"},{"id":2,"image_prompt":"...","overlay_text":[{"text":"XVII Legion","trigger":"Seventeenth"}]}]}`;
 

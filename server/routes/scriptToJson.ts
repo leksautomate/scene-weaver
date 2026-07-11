@@ -22,6 +22,7 @@ import {
   PASS2_IMPASTO_SYSTEM,
   PASS2_WWII_SYSTEM,
   getGroqModelConfig,
+  splitScriptByDuration,
 } from "../../shared/scriptToJsonUtils";
 import { PROJECT_ID, getAccessToken } from "../lib/gemini.js";
 
@@ -398,7 +399,7 @@ async function callPass2Batch(
   retryOnParseFailure = true,
   geminiModel?: string,
   stylePrompt?: string
-): Promise<Array<{ id?: number; scene_number?: number; prompt?: string; image_prompt?: string }>> {
+): Promise<Array<{ id?: number; scene_number?: number; prompt?: string; image_prompt?: string; overlay_text?: any }>> {
   const baseSystem = style === "ww2" ? PASS2_WWII_SYSTEM : PASS2_IMPASTO_SYSTEM;
   const systemPromptPrompt = stylePrompt
     ? `${baseSystem}\n\n---\nADDITIONAL STYLE DIRECTION (follow these instructions for all image prompts):\n${stylePrompt}`
@@ -578,55 +579,23 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
   }
 
   try {
-    // Pass 1
-    const chunks = chunkScript(script, PASS1_CHUNK_MAX_WORDS);
-    job.progress = { phase: "pass1", done: 0, total: chunks.length };
+    // Pass 1: Local Deterministic Split
+    job.progress = { phase: "pass1", done: 0, total: 100 };
     saveJobsToDisk();
 
-    const allSplitScenes: SplitScene[] = [];
-    let nextId = 1;
-
-    for (let i = 0; i < chunks.length; i++) {
-      if (i > 0) {
-        // Space out requests to avoid hitting TPM/RPM rate limits
-        let waitMs = 2000;
-        if (provider === "groq") waitMs = delayPass1;
-        else if (provider === "claude") waitMs = 12000;
-        else if (provider === "gemini") waitMs = 6000;
-        else if (provider === "inworld") waitMs = 3000;
-        await delay(waitMs);
-      }
-      const scenes = await withGroqRotation(key => callPass1(
-        chunks[i],
-        nextId,
-        wordsPerScene,
-        secondsPerScene,
-        provider,
-        key,
-        claudeModel,
-        groqModel,
-        3,
-        true,
-        geminiModel
-      ));
-      scenes.forEach((s, idx) => { s.id = nextId + idx; });
-      allSplitScenes.push(...scenes);
-      nextId += scenes.length;
-      job.progress = { phase: "pass1", done: i + 1, total: chunks.length };
-      saveJobsToDisk();
-    }
-
-    if (allSplitScenes.length === 0) throw new Error("No scenes were generated from the script");
-
-    const rebalancedScenes = rebalanceScenesByDuration(allSplitScenes, wordsPerScene);
+    const rebalancedScenes = splitScriptByDuration(script, secondsPerScene);
     const visualTypes = assignVisualTypes(rebalancedScenes.length);
 
-    // Pass 2
+    job.progress = { phase: "pass1", done: 100, total: 100 };
+    saveJobsToDisk();
+
+    // Pass 2: Prompt and Overlay Generation
     const totalBatches = Math.ceil(rebalancedScenes.length / batchSize);
     job.progress = { phase: "pass2", done: 0, total: rebalancedScenes.length };
     saveJobsToDisk();
 
     const promptMap = new Map<number, string>();
+    const overlayMap = new Map<number, any>();
     const completedForAnchor: Array<{ script: string; prompt: string }> = [];
 
     for (let b = 0; b < totalBatches; b++) {
@@ -647,8 +616,11 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
       for (const r of results) {
         const idVal = r.id ?? r.scene_number ?? (r as any).sceneNumber ?? (r as any).scene_id ?? (r as any).scene_Id;
         const promptVal = r.prompt ?? r.image_prompt ?? (r as any).description ?? (r as any).imagePrompt;
-        if (idVal !== undefined && promptVal !== undefined) {
-          promptMap.set(Number(idVal), promptVal);
+        const overlayVal = r.overlay_text ?? r.overlayText ?? (r as any).overlay ?? null;
+        if (idVal !== undefined) {
+          const numericId = Number(idVal);
+          if (promptVal !== undefined) promptMap.set(numericId, promptVal);
+          if (overlayVal !== undefined) overlayMap.set(numericId, overlayVal);
         }
       }
       for (const scene of batch) {
@@ -662,7 +634,7 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
           image: `${s.id}.png`,
           script: s.script,
           prompt: promptMap.get(s.id)!,
-          overlay_text: s.overlay_text,
+          overlay_text: overlayMap.get(s.id) ?? null,
         }));
       job.progress = { phase: "pass2", done: doneSoFar, total: rebalancedScenes.length, partialScenes };
       saveJobsToDisk();
@@ -672,7 +644,7 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
       image: `${s.id}.png`,
       script: s.script,
       prompt: promptMap.get(s.id) ?? "[generation failed]",
-      overlay_text: s.overlay_text,
+      overlay_text: overlayMap.get(s.id) ?? null,
     }));
 
     job.status = "completed";

@@ -32,6 +32,7 @@ import {
   PASS2_IMPASTO_SYSTEM,
   PASS2_WWII_SYSTEM,
   getGroqModelConfig,
+  splitScriptByDuration,
 } from "../../shared/scriptToJsonUtils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -218,7 +219,7 @@ async function callPass2Batch(
   retryOnParseFailure = true,
   geminiModel?: string,
   stylePrompt?: string
-): Promise<Array<{ id?: number; scene_number?: number; prompt?: string; image_prompt?: string }>> {
+): Promise<Array<{ id?: number; scene_number?: number; prompt?: string; image_prompt?: string; overlay_text?: any }>> {
   const baseSystem = style === "ww2" ? PASS2_WWII_SYSTEM : PASS2_IMPASTO_SYSTEM;
   const systemPromptPrompt = stylePrompt
     ? `${baseSystem}\n\n---\nADDITIONAL STYLE DIRECTION (follow these instructions for all image prompts):\n${stylePrompt}`
@@ -410,65 +411,26 @@ export async function runScriptToJson(
     ? 10
     : INWORLD_BATCH_SIZE;
 
-  // ── Pass 1: scene splitting ─────────────────────────────────────────────────
-  const chunks = chunkScript(script, PASS1_CHUNK_MAX_WORDS);
-  onProgress("pass1", 0, chunks.length);
+  // ── Pass 1: scene splitting (Deterministic Local) ───────────────────────────
+  onProgress("pass1", 0, 100);
+  const rebalancedScenes = splitScriptByDuration(script, secondsPerScene);
+  onProgress("pass1", 100, 100);
 
-  const allSplitScenes: SplitScene[] = [];
-  let nextId = 1;
+  const visualTypes = assignVisualTypes(rebalancedScenes.length);
   const groqConfig = getGroqModelConfig(params.groqModel || "llama-3.3-70b-versatile");
 
   // Calculate dynamic delays for Groq based on rate limits to prevent TPM 429s
-  let delayPass1 = Math.ceil(60000 / groqConfig.rpm);
-  if (groqConfig.tpm <= 15000) {
-    delayPass1 = Math.max(delayPass1, Math.ceil(90000 / groqConfig.tpm * 1000));
-  }
   let delayPass2 = Math.ceil(60000 / groqConfig.rpm);
   if (groqConfig.tpm <= 15000) {
     delayPass2 = Math.max(delayPass2, Math.ceil(90000 / groqConfig.tpm * 1000));
   }
-
-  for (let i = 0; i < chunks.length; i++) {
-    if (i > 0) {
-      // Space out requests to avoid hitting TPM rate limits
-      let waitMs = 2000;
-      if (provider === "groq") waitMs = delayPass1;
-      else if (provider === "claude") waitMs = 20000;
-      else if (provider === "inworld") waitMs = 3000;
-      await delay(waitMs);
-    }
-    const scenes = await withGroqRotation(key => callPass1(
-      chunks[i],
-      nextId,
-      wordsPerScene,
-      secondsPerScene,
-      provider,
-      key,
-      params.groqModel,
-      params.claudeModel,
-      3,
-      true,
-      params.geminiModel
-    ));
-    scenes.forEach((s, idx) => { s.id = nextId + idx; });
-    if (scenes.length === 0) {
-      console.warn(`[${provider}] Pass1 chunk ${i + 1}/${chunks.length} returned 0 scenes`);
-    }
-    allSplitScenes.push(...scenes);
-    nextId += scenes.length;
-    onProgress("pass1", i + 1, chunks.length);
-  }
-
-  if (allSplitScenes.length === 0) throw new Error("No scenes were generated from the script");
-
-  const rebalancedScenes = rebalanceScenesByDuration(allSplitScenes, wordsPerScene);
-  const visualTypes = assignVisualTypes(rebalancedScenes.length);
 
   // ── Pass 2: prompt generation ───────────────────────────────────────────────
   const totalBatches = Math.ceil(rebalancedScenes.length / batchSize);
   onProgress("pass2", 0, rebalancedScenes.length);
 
   const promptMap = new Map<number, string>();
+  const overlayMap = new Map<number, any>();
   const completedForAnchor: Array<{ script: string; prompt: string }> = [];
 
   for (let b = 0; b < totalBatches; b++) {
@@ -489,7 +451,8 @@ export async function runScriptToJson(
     for (const r of results) {
       const idVal = r.id ?? r.scene_number ?? (r as any).sceneNumber ?? (r as any).scene_id ?? (r as any).scene_Id;
       const promptVal = r.prompt ?? r.image_prompt ?? (r as any).description ?? (r as any).imagePrompt;
-      if (idVal !== undefined && promptVal !== undefined) {
+      const overlayVal = r.overlay_text ?? r.overlayText ?? (r as any).overlay ?? null;
+      if (idVal !== undefined) {
         let numericId: number | undefined;
         if (typeof idVal === "number") {
           numericId = idVal;
@@ -498,7 +461,8 @@ export async function runScriptToJson(
           if (match) numericId = parseInt(match[0], 10);
         }
         if (numericId !== undefined) {
-          promptMap.set(numericId, promptVal);
+          if (promptVal !== undefined) promptMap.set(numericId, promptVal);
+          if (overlayVal !== undefined) overlayMap.set(numericId, overlayVal);
         }
       }
     }
@@ -513,7 +477,7 @@ export async function runScriptToJson(
         image: `${s.id}.png`,
         script: s.script,
         prompt: promptMap.get(s.id)!,
-        overlay_text: s.overlay_text,
+        overlay_text: overlayMap.get(s.id) ?? null,
       }));
     onProgress("pass2", doneSoFar, rebalancedScenes.length, partialScenes);
   }
@@ -522,7 +486,7 @@ export async function runScriptToJson(
     image: `${s.id}.png`,
     script: s.script,
     prompt: promptMap.get(s.id) ?? "[generation failed]",
-    overlay_text: s.overlay_text,
+    overlay_text: overlayMap.get(s.id) ?? null,
   }));
 
   return { title, scenes };
