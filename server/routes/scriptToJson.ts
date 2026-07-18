@@ -21,6 +21,8 @@ import {
   type VisualType,
   PASS2_IMPASTO_SYSTEM,
   PASS2_WWII_SYSTEM,
+  PASS2_DOODLE_SYSTEM,
+  buildCustomPass2System,
   getGroqModelConfig,
   splitScriptByDuration,
 } from "../../shared/scriptToJsonUtils";
@@ -49,7 +51,7 @@ interface JobParams {
   title: string;
   script: string;
   secondsPerScene: number;
-  style: "impasto" | "ww2";
+  style: "impasto" | "ww2" | "doodle" | "custom";
   provider: "groq" | "inworld" | "claude" | "gemini";
   apiKey: string;
   groqApiKeys?: string[];
@@ -389,7 +391,7 @@ async function callPass2Batch(
   title: string,
   scenes: SplitScene[],
   visualTypes: VisualType[],
-  style: "impasto" | "ww2",
+  style: "impasto" | "ww2" | "doodle" | "custom",
   provider: "groq" | "inworld" | "claude" | "gemini",
   apiKey: string,
   continuityAnchor: string,
@@ -400,10 +402,15 @@ async function callPass2Batch(
   geminiModel?: string,
   stylePrompt?: string
 ): Promise<Array<{ id?: number; scene_number?: number; prompt?: string; image_prompt?: string; overlay_text?: any }>> {
-  const baseSystem = style === "ww2" ? PASS2_WWII_SYSTEM : PASS2_IMPASTO_SYSTEM;
-  const systemPromptPrompt = stylePrompt
-    ? `${baseSystem}\n\n---\nADDITIONAL STYLE DIRECTION (follow these instructions for all image prompts):\n${stylePrompt}`
-    : baseSystem;
+  let systemPromptPrompt: string;
+  if (style === "custom") {
+    systemPromptPrompt = buildCustomPass2System(stylePrompt || "");
+  } else {
+    const baseSystem = style === "ww2" ? PASS2_WWII_SYSTEM : style === "doodle" ? PASS2_DOODLE_SYSTEM : PASS2_IMPASTO_SYSTEM;
+    systemPromptPrompt = stylePrompt
+      ? `${baseSystem}\n\n---\nADDITIONAL STYLE DIRECTION (follow these instructions for all image prompts):\n${stylePrompt}`
+      : baseSystem;
+  }
   const systemPrompt = continuityAnchor ? `${systemPromptPrompt}\n\n${continuityAnchor}` : systemPromptPrompt;
 
   const scenesText = scenes
@@ -583,7 +590,8 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
     job.progress = { phase: "pass1", done: 0, total: 100 };
     saveJobsToDisk();
 
-    const rebalancedScenes = splitScriptByDuration(script, secondsPerScene);
+    const splitScenes = splitScriptByDuration(script, secondsPerScene);
+    const rebalancedScenes = rebalanceScenesByDuration(splitScenes, wordsPerScene);
     const visualTypes = assignVisualTypes(rebalancedScenes.length);
 
     job.progress = { phase: "pass1", done: 100, total: 100 };

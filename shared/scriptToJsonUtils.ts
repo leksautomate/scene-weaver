@@ -27,7 +27,7 @@ export interface ScriptToJsonParams {
   title: string;
   script: string;
   secondsPerScene: number;
-  style: "impasto" | "ww2";
+  style: "impasto" | "ww2" | "doodle" | "custom";
   provider: "groq" | "inworld" | "claude" | "gemini";
   groqApiKey?: string;
   groqApiKeys?: string[];
@@ -84,11 +84,7 @@ export function estimateSceneCount(wordCount: number, secondsPerScene: number): 
 
 export function chunkScript(text: string, maxWords: number): string[] {
   if (!text || !text.trim()) return [];
-  const matched = text.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [];
-  const coveredLength = matched.reduce((sum, s) => sum + s.length, 0);
-  const trailing = text.slice(coveredLength).trim();
-  const sentences =
-    matched.length > 0 ? (trailing ? [...matched, trailing] : matched) : [text];
+  const sentences = splitIntoSentences(text);
 
   const chunks: string[] = [];
   let current: string[] = [];
@@ -126,10 +122,24 @@ function countWords(text: string): number {
 }
 
 function splitIntoSentences(text: string): string[] {
-  const matched = text.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [];
-  const coveredLength = matched.reduce((sum, s) => sum + s.length, 0);
-  const trailing = text.slice(coveredLength).trim();
-  const sentences = matched.map((s) => s.trim());
+  if (!text || !text.trim()) return [];
+  // Walk the string tracking actual positions (rather than summing matched-substring
+  // lengths) so content is never silently dropped when a terminal punctuation mark
+  // isn't followed by whitespace (abbreviations like "U.S.", decimals, or a missing
+  // space after a period) — matches at arbitrary offsets used to desync the running
+  // "covered length" from the real cursor position, deleting and duplicating text.
+  const sentences: string[] = [];
+  const regex = /[.!?]+(?:\s+|$)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const end = match.index + match[0].length;
+    const sentence = text.slice(lastIndex, end).trim();
+    if (sentence) sentences.push(sentence);
+    lastIndex = end;
+    if (match[0].length === 0) regex.lastIndex++;
+  }
+  const trailing = text.slice(lastIndex).trim();
   if (trailing) sentences.push(trailing);
   return sentences.length > 0 ? sentences : [text.trim()];
 }
@@ -831,6 +841,104 @@ Use plain digits — no commas: 25000 not 25,000. Set null if nothing meaningful
 
 Return ONLY valid JSON:
 {"scenes":[{"id":1,"image_prompt":"Full cinematic prompt here, 5–7 sentences.","overlay_text":"June 1944"},{"id":2,"image_prompt":"...","overlay_text":[{"text":"XVII Legion","trigger":"Seventeenth"}]}]}`;
+
+// "custom" style has no fixed system prompt of its own — the user supplies only the visual-style
+// portion (aesthetic, camera rules, reference examples) via the Style Prompt textarea, and this
+// wraps it with the same narration-fidelity and scene-tagging rules every built-in style gets, plus
+// a fixed JSON-output footer. No overlay-text instructions are included for custom style: the schema
+// still accepts an optional "overlay_text", it's just never required, so it comes back null/absent
+// unless the user's own template happens to ask for it.
+export function buildCustomPass2System(customStyleText: string): string {
+  const trimmed = customStyleText.trim();
+  return `You are the Lead Creative Director and Historical Consultant for a high-end educational documentary series.
+
+Each image prompt must follow the narration — not random — it must follow the story. Do not add to or remove from the narration.
+
+VISUAL STYLE (follow this exactly for every generated prompt):
+${trimmed || "(no custom style provided)"}
+
+Each scene below is pre-tagged "[NARRATIVE]" or "[INFOGRAPHIC]" — this tag is MANDATORY, not a suggestion you can override based on the narration content. It already enforces the required 70/30 distribution across the whole video, so never re-balance it yourself and never relabel a scene:
+- [NARRATIVE] → action/portrait/establishing scenes following the visual style above
+- [INFOGRAPHIC] → maps, diagrams, strategic/historical data rendered in the same visual style — even if the narration text for that scene doesn't obviously describe a map or chart, invent one that fits the moment
+
+Every prompt MUST contain a CLEAR VISIBLE ACTION or focal subject — never a static, empty description.
+
+Return ONLY valid JSON in this exact format:
+{"scenes":[{"id":1,"image_prompt":"Full prompt here, following the visual style above."},{"id":2,"image_prompt":"..."}]}`;
+}
+
+export const PASS2_DOODLE_SYSTEM = `You are an expert storyboard artist and AI prompt engineer for an educational YouTube channel. You take a raw video script and convert it into a sequence of highly effective, visually consistent image generation prompts for Midjourney, DALL-E 3, or Stable Diffusion.
+
+Each image prompt must follow the narration — not random — it must follow the story. Do not add to or remove from the narration.
+
+1. VISUAL AESTHETIC
+Minimalist 2D hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style. Thick, slightly irregular hand-drawn black outlines (fine felt-tip pen look) — rough and imperfect, never clean vector lines. Flat solid marker and crayon color fills with slight white gaps near outlines — NO gradients, NO 3D rendering, NO shading, NO photorealism. Clean solid off-white/white background with plenty of negative space. Characters are simple stick-figures: a solid white oval/egg-head, simple black lines for eyes/eyebrows, solid-color blocky bodies, cartoonish scribbled features. Palette restricted to soft muted mustard yellow, soft blue, warm red, and light gray on the white background. Handwritten labels, arrows, and sound-effect scribbles are encouraged where they clarify the scene (dates, place names, tallies, sound waves).
+
+Each scene below is pre-tagged "[NARRATIVE]" or "[INFOGRAPHIC]" — this tag is MANDATORY, not a suggestion you can override based on the narration content. It already enforces the required 70/30 distribution across the whole video, so never re-balance it yourself and never relabel a scene:
+- [NARRATIVE] → doodle-style scenes of characters/action/objects (section 1 above)
+- [INFOGRAPHIC] → hand-drawn schematic maps, diagrams, tally/stat sketches (section 2 below) — even if the narration text for that scene doesn't obviously describe a map or chart, invent one that fits the moment (a scribbled route map, a hand-drawn tally of forces/numbers, a labeled cutaway diagram, etc.)
+
+2. INFORMATIONAL ASSET DESIGN
+All maps and diagrams keep the same doodle rules as narrative scenes: rough felt-tip outlines, flat marker/crayon fills, restricted palette, white background. Use a scribbled compass rose, dotted or arrowed routes, and handwritten place-name/distance labels. Infographics use scribbled icons (factory, coin, calendar, crew figures, etc.) with handwritten numbers and short labels rather than clean vector iconography.
+
+3. PROMPT STRUCTURE — each prompt should describe roughly 20 to 30 words of scene content (subject, action, setting, notable doodle details) before the fixed style tail described below.
+
+Every prompt MUST contain a CLEAR VISIBLE ACTION or focal subject — never a static, empty description.
+
+4. CAMERA ANGLE & COMPOSITION VARIETY — do not repeat the same medium-shot layout; explicitly vary across scenes:
+- Top-Down View: bird's-eye looking straight down (a desk with papers, a flat map on a table)
+- Close-Up / Macro: a single symbolic object (a coin, a ticking clock, a film reel)
+- Wide-Angle Landscape: an expansive broad view (a harbor, a coastline, a continent-scale map)
+- Medium / Eye-Level Shot: a character gesturing beside a chart or facing the viewer
+Never use split-screen or side-by-side comparison shots.
+
+5. HARD CONSTRAINTS
+No clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism, no modern sans-serif infographic look, no identifiable real faces.
+RESTRICTIONS: no text overlays baked into the image itself (overlay text is added separately, see below), no fantasy/sci-fi/modern brands.
+
+6. STYLE TAIL — append this exact phrasing (adapted to the scene's palette/subject) to the end of every generated prompt:
+"simple hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style, rough imperfect black outlines, simple flat marker and crayon color fills with slight white gaps near outlines, soft muted mustard yellow, soft blue, warm red, and light gray palette on solid white background, no clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism --ar 16:9"
+
+7. STYLE REFERENCE EXAMPLES (FOLLOW THIS EXACT PHRASING AND STYLE IN YOUR GENERATED PROMPTS):
+
+Example 1 (Wide establishing scene):
+February 1943 in the middle of the North Atlantic, moonless night, vast dark ocean with rolling waves, a loose ragged convoy of empty American freighters steaming east toward Britain, blacked-out decks, tiny silhouettes scattered across the sea, cold wartime atmosphere, simple hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style, rough imperfect black outlines, simple flat marker and crayon color fills with slight white gaps near outlines, soft muted mustard yellow, soft blue, warm red, and light gray palette on solid white background, rough stick figure sailors with cartoonish scribbled features, hand-drawn waves and handwritten "North Atlantic, February 1943" label, no clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism --ar 16:9
+
+Example 2 (Close/medium action):
+Inside the cramped conning tower, a confident twenty-five-year-old German lieutenant wearing headphones counts distant freighters by ear, smiling as he marks rough tally lines on a small chart, other stick figure crewmen watching him, simple hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style, rough imperfect black outlines, simple flat marker and crayon color fills with slight white gaps near outlines, soft muted mustard yellow, soft blue, warm red, and light gray palette on solid white background, rough stick figure characters with cartoonish scribbled features, handwritten tally marks and sound waves representing hidden ships beyond the horizon, no clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism --ar 16:9
+
+Example 3 (Infographic/map):
+Hand-drawn schematic map of the North Atlantic showing America on the left, Britain on the right, the convoy route drawn as a rough dotted line across the ocean, a small freighter cluster and a German U-boat icon separated by twelve hundred miles, handwritten labels "Convoy," "Britain," and "1,200 miles away," simple hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style, rough imperfect black outlines, simple flat marker and crayon color fills with slight white gaps near outlines, soft muted mustard yellow, soft blue, warm red, and light gray palette on solid white background, scribbled compass, waves, arrows, and sketch-style icons, no clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism --ar 16:9
+
+Example 4 (Infographic/stat breakdown):
+Hand-drawn infographic explaining the value of the U-boat, central sketch of a German Type VII submarine surrounded by handwritten notes "4 million Reichsmarks," "1 year to build," "44 crew," and "fuel to cross the Atlantic and return," small scribbled factory, fuel barrel, calendar, and crew icons, simple hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style, rough imperfect black outlines, simple flat marker and crayon color fills with slight white gaps near outlines, soft muted mustard yellow, soft blue, warm red, and light gray palette on solid white background, sketch-style charts, arrows, and hand-written labels, no clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism --ar 16:9
+
+OVERLAY TEXT RULES:
+Overlays increase understanding and emotion — must NOT repeat narration.
+STRICT MAX 3 WORDS per label. Plain text only — no markdown, no asterisks, no hashtags, no symbols.
+
+TWO FORMATS — choose based on the scene:
+
+1. SIMPLE (one key fact) → plain string:
+   "June 1944"
+
+2. COMPLEX (scene narrates a list of units/forces/names/numbers) → array of objects:
+   Each object: {"text": "label max 3 words", "trigger": "oneword"}
+   - "trigger" = the EXACT single word spoken in the narration that fires this overlay
+   - trigger must appear verbatim in the script field
+   - Max 6 items per array
+
+Example for "the Seventeenth, Eighteenth, and Nineteenth Legions, six auxiliary cohorts, three squadrons of cavalry":
+[{"text":"XVII Legion","trigger":"Seventeenth"},{"text":"XVIII Legion","trigger":"Eighteenth"},{"text":"XIX Legion","trigger":"Nineteenth"},{"text":"6 Cohorts","trigger":"six"},{"text":"3 Cavalry","trigger":"three"}]
+
+Overlay types (pick most impactful):
+DATE "476 AD" | LOCATION "Normandy" | FORCE SIZE "39 Australians" | CASUALTIES "8000 Killed"
+COMMANDER "Erwin Rommel" | STRATEGIC FACT "Outnumbered 50:1" | STATUS "Final Assault" | OUTCOME "Allied Victory"
+
+Use plain digits — no commas: 25000 not 25,000. Set null if nothing meaningful.
+
+Return ONLY valid JSON:
+{"scenes":[{"id":1,"image_prompt":"Full doodle-style prompt here, ending with the style tail.","overlay_text":"June 1944"},{"id":2,"image_prompt":"...","overlay_text":[{"text":"XVII Legion","trigger":"Seventeenth"}]}]}`;
 
 export const PASS2_WWII_SYSTEM = `You are the Lead Creative Director and Historical Consultant for a high-end educational documentary series. You produce historical videos exploring World War II warfare through a human-centered tactical lens.
 

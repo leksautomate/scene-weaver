@@ -7,6 +7,9 @@ import { Loader2, Copy, Download, CheckCircle2, AlertCircle, X, Trash2, History,
 import { loadProviderSettings, COMPACT_STYLE_SUFFIX, COMPACT_WWII_STYLE_SUFFIX } from "@/lib/providers";
 import { estimateSceneCount, type OutputScene } from "@/lib/scriptToJson";
 
+const COMPACT_DOODLE_STYLE_SUFFIX =
+  `simple hand-drawn digital doodle, felt-tip pen sketch, rough marker drawing style, rough imperfect black outlines, simple flat marker and crayon color fills with slight white gaps near outlines, soft muted mustard yellow, soft blue, warm red, and light gray palette on solid white background, no clean vector lines, no perfect geometric shapes, no 3D elements, no gradients, no photorealism, 16:9`;
+
 const DURATION_OPTIONS = [
   { value: 10, label: "10s", words: 19 },
   { value: 15, label: "15s", words: 29 },
@@ -14,7 +17,7 @@ const DURATION_OPTIONS = [
   { value: 30, label: "30s", words: 57 },
 ] as const;
 
-type Style = "impasto" | "ww2";
+type Style = "impasto" | "ww2" | "doodle" | "custom";
 type Provider = "groq" | "inworld" | "claude" | "gemini";
 
 interface JobProgress {
@@ -28,7 +31,7 @@ interface JobParams {
   title: string;
   script: string;
   secondsPerScene: number;
-  style: "impasto" | "ww2";
+  style: "impasto" | "ww2" | "doodle" | "custom";
   provider: "groq" | "inworld" | "claude" | "gemini";
   apiKey?: string;
   claudeModel?: string;
@@ -84,6 +87,10 @@ export default function ScriptToJson() {
     setStyle(s);
     if (s === "ww2") {
       setStylePrompt(COMPACT_WWII_STYLE_SUFFIX);
+    } else if (s === "doodle") {
+      setStylePrompt(COMPACT_DOODLE_STYLE_SUFFIX);
+    } else if (s === "custom") {
+      setStylePrompt("");
     } else {
       setStylePrompt(COMPACT_STYLE_SUFFIX);
     }
@@ -254,7 +261,16 @@ export default function ScriptToJson() {
     setScript(script || "");
     setSecondsPerScene((secondsPerScene as 10 | 15 | 20 | 30) || 15);
     setStyle(style || "impasto");
-    setStylePrompt(stylePrompt || (style === "ww2" ? COMPACT_WWII_STYLE_SUFFIX : COMPACT_STYLE_SUFFIX));
+    setStylePrompt(
+      stylePrompt ??
+        (style === "ww2"
+          ? COMPACT_WWII_STYLE_SUFFIX
+          : style === "doodle"
+          ? COMPACT_DOODLE_STYLE_SUFFIX
+          : style === "custom"
+          ? ""
+          : COMPACT_STYLE_SUFFIX)
+    );
     setProvider(provider || "groq");
     setActiveTab("new");
     toast({
@@ -411,8 +427,8 @@ export default function ScriptToJson() {
               <label className="text-xs font-medium text-primary uppercase tracking-wide block mb-2">
                 Visual Style
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {(["impasto", "ww2"] as const).map((s) => (
+              <div className="grid grid-cols-4 gap-2">
+                {(["impasto", "ww2", "doodle", "custom"] as const).map((s) => (
                   <button
                     key={s}
                     onClick={() => handleStyleChange(s)}
@@ -424,12 +440,16 @@ export default function ScriptToJson() {
                     }`}
                   >
                     <div className="text-xs font-semibold">
-                      {s === "impasto" ? "🎨 Impasto Oil" : "📷 WWII Archival"}
+                      {s === "impasto" ? "🎨 Impasto Oil" : s === "ww2" ? "📷 WWII Archival" : s === "doodle" ? "✏️ Doodle Sketch" : "🛠️ Custom"}
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-tight">
                       {s === "impasto"
                         ? "17th-century digital oil painting, heavy brushwork, chiaroscuro"
-                        : "B&W photojournalism, Kodak grain, documentary realism"}
+                        : s === "ww2"
+                        ? "B&W photojournalism, Kodak grain, documentary realism"
+                        : s === "doodle"
+                        ? "Hand-drawn felt-tip stick-figure doodle, flat marker colors"
+                        : "Write your own full visual-style template"}
                     </div>
                   </button>
                 ))}
@@ -439,18 +459,24 @@ export default function ScriptToJson() {
             {/* Style Prompt Textarea */}
             <div>
               <label className="text-xs font-medium text-primary uppercase tracking-wide block mb-1.5">
-                Style Prompt Suffix
+                {style === "custom" ? "Custom Visual Style" : "Style Prompt Suffix"}
               </label>
               <Textarea
                 value={stylePrompt}
                 onChange={(e) => setStylePrompt(e.target.value)}
-                className="bg-secondary border-border min-h-[90px] font-mono text-[10px] leading-normal"
-                rows={4}
-                placeholder="Describe the visual style suffix..."
+                className={`bg-secondary border-border font-mono text-[10px] leading-normal ${style === "custom" ? "min-h-[220px]" : "min-h-[90px]"}`}
+                rows={style === "custom" ? 10 : 4}
+                placeholder={
+                  style === "custom"
+                    ? "Describe the art style, medium, line/color rules, and 2-4 example prompts. Everything else — narration fidelity, NARRATIVE/INFOGRAPHIC scene tagging, and the JSON output format — is handled automatically, so you only need to write the visual style itself. Overlay text is optional and not required for custom style."
+                    : "Describe the visual style suffix..."
+                }
                 disabled={generating}
               />
               <p className="text-[10px] text-muted-foreground mt-1 leading-normal">
-                This suffix is appended to the system prompts for scene generation.
+                {style === "custom"
+                  ? "This text fully replaces the built-in style rules. Describe only the visual aesthetic (medium, linework, color, camera variety, reference examples) — scene tagging and JSON output are added automatically."
+                  : "This suffix is appended to the system prompts for scene generation."}
               </p>
             </div>
 
