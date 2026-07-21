@@ -255,7 +255,7 @@ export async function runClientSidePipeline(
   const { project: projectData } = await fetch(`${API_BASE}/projects/${serverProjectId}`).then(r => r.json());
   const projectAspectRatio: string = (projectData?.settings as any)?.aspectRatio || settings.aspectRatio || "16:9";
 
-  const concurrency = Math.max(1, Math.min(5, settings.imageConcurrency || 2));
+  const concurrency = Math.max(1, Math.min(30, settings.imageConcurrency || 20));
 
   const processScene = async (scene: SceneManifest) => {
     const num = scene.scene_number;
@@ -777,7 +777,7 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
 
   callbacks.onPhase(`Resuming ${pendingScenes.length} scenes...`);
   const resumeAspectRatio: string = (resumeProjectData?.settings as any)?.aspectRatio || settings.aspectRatio || "16:9";
-  const concurrency = Math.max(1, Math.min(5, settings.imageConcurrency || 2));
+  const concurrency = Math.max(1, Math.min(30, settings.imageConcurrency || 20));
 
   const processScene = async (scene: Scene) => {
     const num = scene.scene_number;

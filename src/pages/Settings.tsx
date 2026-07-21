@@ -610,9 +610,9 @@ export default function Settings() {
                 <Slider
                   value={[settings.imageConcurrency]}
                   onValueChange={([v]) => setSettings(s => ({ ...s, imageConcurrency: v }))}
-                  min={1} max={5} step={1}
+                  min={1} max={30} step={1}
                 />
-                <p className="text-xs text-muted-foreground">Number of images generated in parallel</p>
+                <p className="text-xs text-muted-foreground">Number of images generated in parallel. Benchmarked safe up to ~50; failures start appearing around 200.</p>
               </div>
               <div className="flex items-center justify-between pt-1">
                 <div>

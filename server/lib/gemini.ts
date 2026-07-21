@@ -12,8 +12,10 @@ type AspectRatio = "16:9" | "9:16" | "1:1";
 const VALID_ASPECT_RATIOS: AspectRatio[] = ["16:9", "9:16", "1:1"];
 
 // Global semaphore — caps concurrent image generation calls across all pipelines.
-// Modal auto-scales per-request, so this just protects against unbounded fan-out from the client.
-const IMAGEN_CONCURRENCY = Number(process.env.IMAGE_CONCURRENCY) || 4;
+// Modal auto-scales per-request, but throughput was confirmed to degrade past ~50-100
+// concurrent (heavy queuing/timeouts observed at 200), so this is a deliberate ceiling,
+// not just fan-out protection.
+const IMAGEN_CONCURRENCY = Number(process.env.IMAGE_CONCURRENCY) || 20;
 let activeImagenCalls = 0;
 const imagenQueue: Array<() => void> = [];
 

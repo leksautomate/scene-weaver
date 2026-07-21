@@ -111,7 +111,7 @@ const DEFAULTS: ProviderSettings = {
   ttsProvider: "inworld",
   voiceId: "Dennis",
   modelId: "inworld-tts-1.5-max",
-  imageConcurrency: 4,
+  imageConcurrency: 20,
   audioConcurrency: 2,
   groqApiKeys: [""],
   googleCloudApiKey: "",

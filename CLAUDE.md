@@ -107,7 +107,7 @@ The `stats.serverPipeline` boolean in the `projects` table is the flag the front
 1. User submits script + optional style images → `POST /api/projects` creates project record
 2. Script split into scenes client-side (Groq API, batched 30 scenes/request)
 3. Scenes inserted via `POST /api/projects/:id/scenes` — triggers server audio pipeline if configured
-4. Images: Modal-hosted Z-Image Turbo API via `/api/gemini-proxy` — client batches scenes in groups of `settings.imageConcurrency` (default 4, Settings → Providers) and generates each batch's images concurrently; server-side semaphore in `server/lib/gemini.ts` (`IMAGE_CONCURRENCY` env var, default 4) caps total concurrent calls across all pipelines
+4. Images: Modal-hosted Z-Image Turbo API via `/api/gemini-proxy` — client batches scenes in groups of `settings.imageConcurrency` (default 20, Settings → Providers) and generates each batch's images concurrently; server-side semaphore in `server/lib/gemini.ts` (`IMAGE_CONCURRENCY` env var, default 20) caps total concurrent calls across all pipelines. Benchmarked against the live Modal endpoint: 100% success up to 51 concurrent, degrading to ~58% success (timeouts) at 200 concurrent — keep this well under 100 if raising it further.
 5. Audio: Inworld TTS API; sequential (100 RPS, retries up to 3× with backoff)
 6. Video export (JsonToVideo page and render routes):
    - Phase 1: `POST /api/render/:id/clips` — one MP4 per scene with Ken Burns effect
@@ -164,7 +164,7 @@ ANTHROPIC_API_KEY=<key>
 GROQ_API_KEY=<key>
 GEMINI_API_KEY=<key>                       # Falls back to Vertex AI if absent
 CLIP_CONCURRENCY=3                         # Parallel clip generation workers (default: 3)
-IMAGE_CONCURRENCY=4                        # Max concurrent Modal image generation calls (default: 4)
+IMAGE_CONCURRENCY=20                       # Max concurrent Modal image generation calls (default: 20; safe up to ~50, degrades by 200)
 ```
 
 Vertex AI access requires `gcloud auth application-default login` on the server host.
