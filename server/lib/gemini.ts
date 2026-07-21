@@ -2,14 +2,16 @@ import { execSync } from "child_process";
 import path from "path";
 
 export const PROJECT_ID = process.env.VERTEX_PROJECT_ID || "project-f3847793-8610-4a16-945";
-const LOCATION_ID = process.env.VERTEX_LOCATION_ID || "europe-west4";
-const MODEL_ID = process.env.VERTEX_MODEL_ID || "imagen-4.0-fast-generate-001";
-const API_ENDPOINT = `${LOCATION_ID}-aiplatform.googleapis.com`;
-// Gemini models only run in us-central1
-const GEMINI_LOCATION = "us-central1";
-const GEMINI_ENDPOINT = `${GEMINI_LOCATION}-aiplatform.googleapis.com`;
 
-// Global semaphore — max 2 concurrent Imagen calls across all pipelines
+// Modal-hosted Z-Image Turbo endpoint used for all image generation
+const MODAL_ZIMAGE_URL = process.env.MODAL_ZIMAGE_URL || "https://leksautomate--z-image-turbo-api.modal.run";
+const MODAL_KEY = process.env.MODAL_KEY;
+const MODAL_SECRET = process.env.MODAL_SECRET;
+
+type AspectRatio = "16:9" | "9:16" | "1:1";
+const VALID_ASPECT_RATIOS: AspectRatio[] = ["16:9", "9:16", "1:1"];
+
+// Global semaphore — max 2 concurrent image generation calls across all pipelines
 const IMAGEN_CONCURRENCY = 2;
 let activeImagenCalls = 0;
 const imagenQueue: Array<() => void> = [];
@@ -38,148 +40,60 @@ export function getAccessToken(): string {
   }
 }
 
-export async function generateGeminiImage(prompt: string, modelId?: string, aspectRatio = "16:9"): Promise<string> {
+export async function generateGeminiImage(prompt: string, aspectRatio = "16:9"): Promise<string> {
   await acquireImagenSlot();
   try {
-    const model = modelId || MODEL_ID;
-    return model.startsWith("gemini-")
-      ? await _generateWithGemini(prompt, model, aspectRatio)
-      : await _generateWithImagen(prompt, model, aspectRatio);
+    return await _generateWithModal(prompt, aspectRatio);
   } finally {
     releaseImagenSlot();
   }
 }
 
-async function _generateWithImagen(prompt: string, model: string, aspectRatio = "16:9"): Promise<string> {
-  const url = `https://${API_ENDPOINT}/v1/projects/${PROJECT_ID}/locations/${LOCATION_ID}/publishers/google/models/${model}:predict`;
+async function _generateWithModal(prompt: string, aspectRatio: string): Promise<string> {
+  if (!MODAL_KEY || !MODAL_SECRET) {
+    throw new Error("MODAL_KEY / MODAL_SECRET not configured — set them in the server environment");
+  }
 
-  const body = {
-    instances: [{ prompt }],
-    parameters: {
-      aspectRatio,
-      sampleImageSize: "1024",
-      sampleCount: 1,
-      personGeneration: "allow_all",
-      safetySettings: "block_few",
-      addWatermark: false,
-      includeRaiReason: false,
-      language: "auto",
-      outputOptions: {
-        mimeType: "image/jpeg",
-        compressionQuality: 95,
+  const ratio: AspectRatio = VALID_ASPECT_RATIOS.includes(aspectRatio as AspectRatio)
+    ? (aspectRatio as AspectRatio)
+    : "16:9";
+
+  const delays = [10_000, 20_000, 30_000];
+  let lastError = "";
+
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    const res = await fetch(MODAL_ZIMAGE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Modal-Key": MODAL_KEY,
+        "Modal-Secret": MODAL_SECRET,
       },
-    },
-  };
-
-  const delays = [10_000, 20_000, 30_000];
-  let lastError = "";
-
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    const accessToken = getAccessToken();
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ prompt, aspect_ratio: ratio }),
       signal: AbortSignal.timeout(120_000),
     });
 
     if (res.ok) {
-      const data = (await res.json()) as { predictions: Array<{ bytesBase64Encoded: string }> };
-      const img = data.predictions?.[0]?.bytesBase64Encoded;
-      if (!img) throw new Error("No image in Imagen response");
-      return img;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length) throw new Error("No image in Z-Image Turbo response");
+      return buf.toString("base64");
     }
 
     const err = await res.text();
-    if (res.status === 401 || res.status === 403) throw new Error("Vertex AI auth failed — run: gcloud auth login --no-browser");
+    if (res.status === 401 || res.status === 403) throw new Error("Z-Image Turbo auth failed — check MODAL_KEY / MODAL_SECRET");
     if (res.status === 429) {
       lastError = `Rate limited (attempt ${attempt + 1})`;
       if (attempt < delays.length) {
-        console.warn(`[imagen] 429 rate limit — retrying in ${delays[attempt] / 1000}s`);
+        console.warn(`[z-image-turbo] 429 rate limit — retrying in ${delays[attempt] / 1000}s`);
         await new Promise(r => setTimeout(r, delays[attempt]));
         continue;
       }
-      throw new Error("Imagen rate limited after 4 attempts — check your Vertex AI quota at console.cloud.google.com");
+      throw new Error("Z-Image Turbo rate limited after 4 attempts");
     }
-    throw new Error(`Imagen API failed ${res.status}: ${err.slice(0, 200)}`);
+    throw new Error(`Z-Image Turbo API failed ${res.status}: ${err.slice(0, 200)}`);
   }
 
-  throw new Error(lastError || "Imagen generation failed");
-}
-
-async function _generateWithGemini(prompt: string, model: string, aspectRatio = "16:9"): Promise<string> {
-  const isGemini31 = model === "gemini-3.1-flash-image-preview";
-  const location = isGemini31 ? "global" : GEMINI_LOCATION;
-  const endpoint = isGemini31 ? "aiplatform.googleapis.com" : GEMINI_ENDPOINT;
-  const url = `https://${endpoint}/v1/projects/${PROJECT_ID}/locations/${location}/publishers/google/models/${model}:generateContent`;
-
-  const body = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: isGemini31
-      ? {
-          temperature: 1,
-          maxOutputTokens: 32768,
-          responseModalities: ["TEXT", "IMAGE"],
-          topP: 0.95,
-          imageConfig: {
-            aspectRatio: aspectRatio || "auto",
-            imageSize: "1K",
-            imageOutputOptions: {
-              mimeType: "image/png",
-            },
-            personGeneration: "ALLOW_ALL",
-          },
-        }
-      : {
-          responseModalities: ["TEXT", "IMAGE"],
-          imageConfig: {
-            aspectRatio,
-          },
-        },
-    safetySettings: [
-      { category: "HARM_CATEGORY_HATE_SPEECH",        threshold: "OFF" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT",  threshold: "OFF" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",  threshold: "OFF" },
-      { category: "HARM_CATEGORY_HARASSMENT",         threshold: "OFF" },
-    ],
-  };
-
-  const delays = [10_000, 20_000, 30_000];
-  let lastError = "";
-
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    const accessToken = getAccessToken();
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
-    });
-
-    if (res.ok) {
-      const data = (await res.json()) as {
-        candidates: Array<{ content: { parts: Array<{ inlineData?: { mimeType: string; data: string } }> } }>;
-      };
-      const img = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
-      if (!img) throw new Error("No image in Gemini response");
-      return img;
-    }
-
-    const err = await res.text();
-    if (res.status === 401 || res.status === 403) throw new Error("Vertex AI auth failed — run: gcloud auth login --no-browser");
-    if (res.status === 429) {
-      lastError = `Rate limited (attempt ${attempt + 1})`;
-      if (attempt < delays.length) {
-        console.warn(`[gemini-img] 429 rate limit — retrying in ${delays[attempt] / 1000}s`);
-        await new Promise(r => setTimeout(r, delays[attempt]));
-        continue;
-      }
-      throw new Error("Gemini rate limited after 4 attempts");
-    }
-    throw new Error(`Gemini image API failed ${res.status}: ${err.slice(0, 200)}`);
-  }
-
-  throw new Error(lastError || "Gemini image generation failed");
+  throw new Error(lastError || "Z-Image Turbo generation failed");
 }
 
 export function getStyleImagePaths(projectId: string): string[] {

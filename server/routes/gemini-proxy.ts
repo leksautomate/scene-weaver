@@ -13,7 +13,7 @@ router.post("/", async (req: Request, res: Response) => {
       if (!promptText) return res.json({ status: 400, data: { error: "prompt required" } });
 
       try {
-        const imageBase64 = await generateGeminiImage(promptText, payload?.modelId, payload?.aspectRatio);
+        const imageBase64 = await generateGeminiImage(promptText, payload?.aspectRatio);
         return res.json({
           status: 200,
           data: { imagePanels: [{ generatedImages: [{ encodedImage: imageBase64 }] }] },

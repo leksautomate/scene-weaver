@@ -277,7 +277,7 @@ export async function runClientSidePipeline(
           let lastError = "All Imagen prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateGeminiImage(prompt, settings.imageModel, projectAspectRatio);
+              imageBlob = await generateGeminiImage(prompt, projectAspectRatio);
               success = true;
               break;
             } catch (e: any) {
@@ -420,7 +420,7 @@ export async function regenerateAssetFrontend(
         let lastError = "";
         for (const prompt of allPrompts) {
           try {
-            imageBlob = await generateGeminiImage(prompt, settings.imageModel, regenAspectRatio);
+            imageBlob = await generateGeminiImage(prompt, regenAspectRatio);
             success = true;
             break;
           } catch (e: any) {
@@ -792,7 +792,7 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
           let lastError = "All Imagen prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateGeminiImage(prompt, settings.imageModel, resumeAspectRatio);
+              imageBlob = await generateGeminiImage(prompt, resumeAspectRatio);
               success = true;
               break;
             } catch (e: any) {

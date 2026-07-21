@@ -37,7 +37,7 @@ Historia is a cinematic historical documentary generator: script → AI scene sp
 - **All `/api/*` routes require a valid JWT cookie (`historia_token`) except `/api/auth/*`**, enforced by `server/middleware/requireAuth.ts`.
 - `/api/auth` — public auth endpoints (see Auth section below)
 - `/api/gemini-proxy` is a multi-service server-side proxy handling five actions:
-  - `generate` — Vertex AI Imagen image generation via `gcloud` access tokens (`server/lib/gemini.ts`)
+  - `generate` — image generation via the Modal-hosted Z-Image Turbo API (`server/lib/gemini.ts`), authenticated with `MODAL_KEY` / `MODAL_SECRET`
   - `groq-chat` — Groq API proxy (uses `apiKey` from request or `GROQ_API_KEY` env)
   - `inworld-chat` — Inworld API proxy using `meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` (uses `apiKey` or `INWORLD_API_KEY` env)
   - `claude-chat` — Anthropic API proxy (uses `apiKey` from request or `ANTHROPIC_API_KEY` env)
@@ -97,7 +97,7 @@ The script-to-JSON process runs as a two-pass AI pipeline. It can run **client-s
 
 ### Asset generation modes
 
-Images are **always generated client-side** via `/api/gemini-proxy` (Vertex AI Imagen). The server pipeline (`runAssetPipeline`) only handles TTS audio when `INWORLD_API_KEY` is set and the project's `ttsProvider` is `inworld`.
+Images are **always generated client-side** via `/api/gemini-proxy` (Modal-hosted Z-Image Turbo API). The server pipeline (`runAssetPipeline`) only handles TTS audio when `INWORLD_API_KEY` is set and the project's `ttsProvider` is `inworld`.
 
 When `INWORLD_API_KEY` is present and `ttsProvider === "inworld"`, `POST /api/projects/:id/scenes` triggers `runAssetPipeline()` server-side for audio and returns `{ serverPipeline: true }`. The frontend polls instead of generating audio locally.
 
@@ -107,7 +107,7 @@ The `stats.serverPipeline` boolean in the `projects` table is the flag the front
 1. User submits script + optional style images → `POST /api/projects` creates project record
 2. Script split into scenes client-side (Groq API, batched 30 scenes/request)
 3. Scenes inserted via `POST /api/projects/:id/scenes` — triggers server audio pipeline if configured
-4. Images: Vertex AI Imagen via `/api/gemini-proxy` (client-driven, 2 concurrent calls enforced server-side via semaphore in `server/lib/gemini.ts`)
+4. Images: Modal-hosted Z-Image Turbo API via `/api/gemini-proxy` (client-driven, 2 concurrent calls enforced server-side via semaphore in `server/lib/gemini.ts`)
 5. Audio: Inworld TTS API; sequential (100 RPS, retries up to 3× with backoff)
 6. Video export (JsonToVideo page and render routes):
    - Phase 1: `POST /api/render/:id/clips` — one MP4 per scene with Ken Burns effect
@@ -128,7 +128,7 @@ The `stats.serverPipeline` boolean in the `projects` table is the flag the front
 - **AI providers** (Groq key, Inworld key, Anthropic key, Gemini key) are stored in `localStorage` and set via the Settings page. The Groq key is **never** in `.env`; it can be passed as `apiKey` in the `groq-chat` proxy request.
 - **Text provider** (`textProvider` in `ProviderSettings`): `"groq"` (default, batch 10), `"claude"` (batch 5), `"inworld"` (batch 15), or `"gemini"` (batch 10). Determines which LLM generates scene image prompts.
 - **Visual theme** (`visualTheme` in `ProviderSettings`): `"impasto"` (default — digital oil painting, heavy impasto style) or `"ww2"` (WWII archival photorealism, B&W film grain). Switches both the system prompt and image style suffix (`COMPACT_STYLE_SUFFIX` / `COMPACT_WWII_STYLE_SUFFIX` in `providers.ts`).
-- **Image models** selectable in Settings: `imagen-4.0-fast-generate-001` (default), `imagen-4.0-generate-001`, `imagen-4.0-ultra-generate-001`, `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`.
+- **Image generation** uses a single model — Modal-hosted Z-Image Turbo (`server/lib/gemini.ts`, `MODAL_ZIMAGE_URL`) — with no per-project model selection. Aspect ratio (`16:9`, `1:1`, `9:16`) remains selectable.
 - `skipImageGeneration` setting (in `ProviderSettings`) bypasses Imagen calls entirely — useful for testing audio/script flows without consuming quota.
 - **shadcn/ui** components live in `src/components/ui/`. Fonts: Cinzel (headings), Source Sans 3 (body).
 - Scene status fields (`image_status`, `audio_status`): `pending` | `completed` | `failed`
@@ -150,10 +150,13 @@ RENDER_API_URL=http://5.189.146.143:9000   # External FFmpeg render API
 RENDER_API_KEY=alliswell
 SERVER_URL=http://5.189.146.143:3001       # Public URL of this server (used by render API to fetch assets)
 INWORLD_API_KEY=<key>                      # Can also be set via Settings page
-# Vertex AI (for Imagen + Veo) — requires gcloud CLI authenticated
+# Modal (Z-Image Turbo image generation)
+MODAL_ZIMAGE_URL=https://leksautomate--z-image-turbo-api.modal.run   # optional override
+MODAL_KEY=<modal-key>
+MODAL_SECRET=<modal-secret>
+# Vertex AI (for Veo + Claude/Gemini text proxy) — requires gcloud CLI authenticated
 VERTEX_PROJECT_ID=<gcp-project-id>
-VERTEX_LOCATION_ID=europe-west4            # Imagen region (default: europe-west4)
-VERTEX_MODEL_ID=imagen-4.0-fast-generate-001
+VERTEX_LOCATION_ID=europe-west4            # Gemini text region (default: europe-west4)
 VEO_LOCATION_ID=us-central1               # Veo is us-central1 only
 VEO_MODEL_ID=veo-3.1-lite-generate-001
 # Optional server-side LLM keys (can also be passed per-request)

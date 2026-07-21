@@ -37,7 +37,6 @@ export const OVERLAY_FONTS = [
 
 export interface ProviderSettings {
   imageProvider: string;
-  imageModel: string;
   aspectRatio: "16:9" | "1:1" | "9:16";
   ttsProvider: string;
   voiceId: string;
@@ -59,14 +58,6 @@ export interface ProviderSettings {
   overlayFontSize?: number;
   veoAudioVolume?: number;
 }
-
-export const IMAGE_MODELS = [
-  { id: "imagen-4.0-fast-generate-001", label: "Imagen 4 Fast" },
-  { id: "imagen-4.0-generate-001", label: "Imagen 4" },
-  { id: "imagen-4.0-ultra-generate-001", label: "Imagen 4 Ultra" },
-  { id: "gemini-2.5-flash-image", label: "Gemini 2.5 Flash" },
-  { id: "gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash Image" },
-] as const;
 
 export const ASPECT_RATIOS = [
   { value: "16:9", label: "16:9 Landscape" },
@@ -110,7 +101,6 @@ export function getAvailableVoices(settings: ProviderSettings): InworldVoice[] {
 
 const DEFAULTS: ProviderSettings = {
   imageProvider: "gemini",
-  imageModel: "imagen-4.0-fast-generate-001",
   aspectRatio: "16:9",
   ttsProvider: "inworld",
   voiceId: "Dennis",
@@ -858,24 +848,23 @@ export async function generateSceneManifest(
 }
 
 // ========================
-// Gemini — Image generation
+// Z-Image Turbo — Image generation
 // ========================
 
-export async function generateGeminiImage(prompt: string, imageModel?: string, aspectRatio?: string): Promise<Blob> {
+export async function generateGeminiImage(prompt: string, aspectRatio?: string): Promise<Blob> {
   const genResult = await apiProxy({
     action: "generate",
     payload: {
       userInput: { candidatesCount: 1, prompts: [prompt] },
-      modelId: imageModel,
       aspectRatio: aspectRatio || "16:9",
     },
   });
 
   if (genResult.status && genResult.status >= 400) {
     const detail = JSON.stringify(genResult.data || genResult).substring(0, 300);
-    console.error(`Gemini generate error ${genResult.status}:`, detail);
-    if (genResult.status === 429) throw new Error("Imagen rate limited — wait a minute and try again.");
-    throw new Error(`Imagen failed (${genResult.status}): ${detail}`);
+    console.error(`Image generate error ${genResult.status}:`, detail);
+    if (genResult.status === 429) throw new Error("Image generation rate limited — wait a minute and try again.");
+    throw new Error(`Image generation failed (${genResult.status}): ${detail}`);
   }
 
   const encodedImage = genResult.data?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;

@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { loadProviderSettings, saveProviderSettings, getAvailableVoices, COMPACT_STYLE_SUFFIX, IMAGE_MODELS, ASPECT_RATIOS } from "@/lib/providers";
-import { FileJson, Upload, Loader2, Play, AlertTriangle, CheckCircle2, Type, Image, Cpu } from "lucide-react";
+import { loadProviderSettings, saveProviderSettings, getAvailableVoices, COMPACT_STYLE_SUFFIX, ASPECT_RATIOS } from "@/lib/providers";
+import { FileJson, Upload, Loader2, Play, AlertTriangle, CheckCircle2, Type, Image } from "lucide-react";
 import { toast } from "sonner";
 
 interface RawScene {
@@ -83,7 +83,6 @@ export default function JsonToVideo() {
 
   const [jsonInput, setJsonInput] = useState("");
   const [title, setTitle] = useState("");
-  const [imageModel, setImageModel] = useState(settings.imageModel || "imagen-4.0-fast-generate-001");
   const [aspectRatio, setAspectRatio] = useState<"16:9" | "1:1" | "9:16">(settings.aspectRatio || "16:9");
   const [voiceId, setVoiceId] = useState(settings.voiceId || "Dennis");
   const [imageMode, setImageMode] = useState<"style-prompt" | "refs">("style-prompt");
@@ -115,8 +114,8 @@ export default function JsonToVideo() {
 
     try {
       const currentSettings = loadProviderSettings();
-      // Persist selected model and aspect ratio so the asset pipeline reads it via loadProviderSettings()
-      saveProviderSettings({ ...currentSettings, imageModel, aspectRatio });
+      // Persist selected aspect ratio so the asset pipeline reads it via loadProviderSettings()
+      saveProviderSettings({ ...currentSettings, aspectRatio });
 
       // Step 1: Create the project record on the server
       const fd = new FormData();
@@ -368,39 +367,21 @@ export default function JsonToVideo() {
               </div>
             )}
 
-            {/* Voice + Image Model */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Narration Voice</label>
-                <Select value={voiceId} onValueChange={setVoiceId}>
-                  <SelectTrigger className="bg-secondary border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allVoices.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>
-                        {v.name} — {v.description}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  <Cpu className="h-4 w-4 text-muted-foreground" />
-                  Image Model
-                </label>
-                <Select value={imageModel} onValueChange={setImageModel}>
-                  <SelectTrigger className="bg-secondary border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IMAGE_MODELS.map(m => (
-                      <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            {/* Voice */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Narration Voice</label>
+              <Select value={voiceId} onValueChange={setVoiceId}>
+                <SelectTrigger className="bg-secondary border-border">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {allVoices.map((v) => (
+                    <SelectItem key={v.id} value={v.id}>
+                      {v.name} — {v.description}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Aspect Ratio */}

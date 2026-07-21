@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createProjectFrontend } from "@/lib/api";
-import { loadProviderSettings, saveProviderSettings, getAvailableVoices, COMPACT_STYLE_SUFFIX, COMPACT_WWII_STYLE_SUFFIX, IMAGE_MODELS, ASPECT_RATIOS } from "@/lib/providers";
-import { Upload, Scroll, Loader2, Sparkles, Type, Image, Cpu } from "lucide-react";
+import { loadProviderSettings, saveProviderSettings, getAvailableVoices, COMPACT_STYLE_SUFFIX, COMPACT_WWII_STYLE_SUFFIX, ASPECT_RATIOS } from "@/lib/providers";
+import { Upload, Scroll, Loader2, Sparkles, Type, Image } from "lucide-react";
 import { toast } from "sonner";
 
 export default function ProjectForm() {
@@ -32,7 +32,6 @@ export default function ProjectForm() {
       setStylePrompt(COMPACT_STYLE_SUFFIX);
     }
   };
-  const [imageModel, setImageModel] = useState(settings.imageModel || "imagen-4.0-fast-generate-001");
   const [aspectRatio, setAspectRatio] = useState<"16:9" | "1:1" | "9:16">(settings.aspectRatio || "16:9");
   const [voiceId, setVoiceId] = useState(settings.voiceId || "Dennis");
   const [splitMode, setSplitMode] = useState<"smart" | "exact" | "duration" | "two">("smart");
@@ -54,8 +53,8 @@ export default function ProjectForm() {
       return;
     }
 
-    // Persist the selected model and aspect ratio so the pipeline reads it via loadProviderSettings()
-    saveProviderSettings({ ...settings, imageModel, aspectRatio });
+    // Persist the selected aspect ratio so the pipeline reads it via loadProviderSettings()
+    saveProviderSettings({ ...settings, aspectRatio });
 
     setLoading(true);
     setPhase("Generating scene manifest...");
@@ -273,37 +272,18 @@ export default function ProjectForm() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  <Cpu className="h-4 w-4 text-muted-foreground" />
-                  Image Model
-                </label>
-                <Select value={imageModel} onValueChange={setImageModel}>
-                  <SelectTrigger className="bg-secondary border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IMAGE_MODELS.map(m => (
-                      <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Aspect Ratio</label>
-                <Select value={aspectRatio} onValueChange={(v) => setAspectRatio(v as "16:9" | "1:1" | "9:16")}>
-                  <SelectTrigger className="bg-secondary border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ASPECT_RATIOS.map(r => (
-                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Aspect Ratio</label>
+              <Select value={aspectRatio} onValueChange={(v) => setAspectRatio(v as "16:9" | "1:1" | "9:16")}>
+                <SelectTrigger className="bg-secondary border-border">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ASPECT_RATIOS.map(r => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {loading && (
