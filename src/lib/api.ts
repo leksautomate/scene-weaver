@@ -255,13 +255,9 @@ export async function runClientSidePipeline(
   const { project: projectData } = await fetch(`${API_BASE}/projects/${serverProjectId}`).then(r => r.json());
   const projectAspectRatio: string = (projectData?.settings as any)?.aspectRatio || settings.aspectRatio || "16:9";
 
-  for (const scene of scenes) {
-    const statusRes = await fetch(`${API_BASE}/projects/${serverProjectId}`).then(r => r.json()).catch(() => null);
-    if (statusRes?.project?.status === "stopped") {
-      callbacks.onPhase("Project stopped by user.");
-      return;
-    }
+  const concurrency = Math.max(1, Math.min(5, settings.imageConcurrency || 2));
 
+  const processScene = async (scene: SceneManifest) => {
     const num = scene.scene_number;
     const sceneAny = scene as any;
     const imageAlreadyDone = sceneAny.image_status === "completed";
@@ -387,6 +383,15 @@ export async function runClientSidePipeline(
         stats: { sceneCount: scenes.length, imagesCompleted, audioCompleted, imagesFailed, audioFailed, needsReviewCount: imagesFailed + audioFailed },
       }),
     });
+  };
+
+  for (let i = 0; i < scenes.length; i += concurrency) {
+    const statusRes = await fetch(`${API_BASE}/projects/${serverProjectId}`).then(r => r.json()).catch(() => null);
+    if (statusRes?.project?.status === "stopped") {
+      callbacks.onPhase("Project stopped by user.");
+      return;
+    }
+    await Promise.all(scenes.slice(i, i + concurrency).map(processScene));
   }
 
   const finalStatus = (imagesFailed > 0 || audioFailed > 0) ? "partial" : "completed";
@@ -772,14 +777,9 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
 
   callbacks.onPhase(`Resuming ${pendingScenes.length} scenes...`);
   const resumeAspectRatio: string = (resumeProjectData?.settings as any)?.aspectRatio || settings.aspectRatio || "16:9";
+  const concurrency = Math.max(1, Math.min(5, settings.imageConcurrency || 2));
 
-  for (const scene of pendingScenes) {
-    const statusRes = await getProject(projectId).catch(() => null);
-    if (statusRes?.project?.status === "stopped") {
-      callbacks.onPhase("Project stopped by user.");
-      return;
-    }
-
+  const processScene = async (scene: Scene) => {
     const num = scene.scene_number;
 
     if (scene.image_status !== "completed") {
@@ -883,6 +883,15 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
         callbacks.onSceneProgress(num, "audio", "failed");
       }
     }
+  };
+
+  for (let i = 0; i < pendingScenes.length; i += concurrency) {
+    const statusRes = await getProject(projectId).catch(() => null);
+    if (statusRes?.project?.status === "stopped") {
+      callbacks.onPhase("Project stopped by user.");
+      return;
+    }
+    await Promise.all(pendingScenes.slice(i, i + concurrency).map(processScene));
   }
 
   const { scenes: finalScenes } = await getProject(projectId);

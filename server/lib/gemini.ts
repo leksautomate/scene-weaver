@@ -11,8 +11,9 @@ const MODAL_SECRET = process.env.MODAL_SECRET;
 type AspectRatio = "16:9" | "9:16" | "1:1";
 const VALID_ASPECT_RATIOS: AspectRatio[] = ["16:9", "9:16", "1:1"];
 
-// Global semaphore — max 2 concurrent image generation calls across all pipelines
-const IMAGEN_CONCURRENCY = 2;
+// Global semaphore — caps concurrent image generation calls across all pipelines.
+// Modal auto-scales per-request, so this just protects against unbounded fan-out from the client.
+const IMAGEN_CONCURRENCY = Number(process.env.IMAGE_CONCURRENCY) || 4;
 let activeImagenCalls = 0;
 const imagenQueue: Array<() => void> = [];
 
