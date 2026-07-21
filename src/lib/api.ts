@@ -277,7 +277,7 @@ export async function runClientSidePipeline(
           let lastError = "All Imagen prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateGeminiImage(prompt, projectAspectRatio);
+              imageBlob = await generateGeminiImage(prompt, projectAspectRatio, { url: settings.modalImageUrl, key: settings.modalKey, secret: settings.modalSecret });
               success = true;
               break;
             } catch (e: any) {
@@ -420,7 +420,7 @@ export async function regenerateAssetFrontend(
         let lastError = "";
         for (const prompt of allPrompts) {
           try {
-            imageBlob = await generateGeminiImage(prompt, regenAspectRatio);
+            imageBlob = await generateGeminiImage(prompt, regenAspectRatio, { url: settings.modalImageUrl, key: settings.modalKey, secret: settings.modalSecret });
             success = true;
             break;
           } catch (e: any) {
@@ -792,7 +792,7 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
           let lastError = "All Imagen prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateGeminiImage(prompt, resumeAspectRatio);
+              imageBlob = await generateGeminiImage(prompt, resumeAspectRatio, { url: settings.modalImageUrl, key: settings.modalKey, secret: settings.modalSecret });
               success = true;
               break;
             } catch (e: any) {

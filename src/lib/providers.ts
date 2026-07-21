@@ -38,6 +38,9 @@ export const OVERLAY_FONTS = [
 export interface ProviderSettings {
   imageProvider: string;
   aspectRatio: "16:9" | "1:1" | "9:16";
+  modalImageUrl: string;
+  modalKey: string;
+  modalSecret: string;
   ttsProvider: string;
   voiceId: string;
   modelId: string;
@@ -102,6 +105,9 @@ export function getAvailableVoices(settings: ProviderSettings): InworldVoice[] {
 const DEFAULTS: ProviderSettings = {
   imageProvider: "gemini",
   aspectRatio: "16:9",
+  modalImageUrl: "https://leksautomate--z-image-turbo-api.modal.run",
+  modalKey: "",
+  modalSecret: "",
   ttsProvider: "inworld",
   voiceId: "Dennis",
   modelId: "inworld-tts-1.5-max",
@@ -851,12 +857,15 @@ export async function generateSceneManifest(
 // Z-Image Turbo — Image generation
 // ========================
 
-export async function generateGeminiImage(prompt: string, aspectRatio?: string): Promise<Blob> {
+export async function generateGeminiImage(prompt: string, aspectRatio?: string, modal?: { url?: string; key?: string; secret?: string }): Promise<Blob> {
   const genResult = await apiProxy({
     action: "generate",
     payload: {
       userInput: { candidatesCount: 1, prompts: [prompt] },
       aspectRatio: aspectRatio || "16:9",
+      modalUrl: modal?.url || undefined,
+      modalKey: modal?.key || undefined,
+      modalSecret: modal?.secret || undefined,
     },
   });
 

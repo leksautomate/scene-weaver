@@ -50,6 +50,8 @@ export default function Settings() {
   const [showGroq, setShowGroq] = useState(false);
   const [showGoogleCloud, setShowGoogleCloud] = useState(false);
   const [showInworld, setShowInworld] = useState(false);
+  const [showModalKey, setShowModalKey] = useState(false);
+  const [showModalSecret, setShowModalSecret] = useState(false);
 
   const [groqStatus, setGroqStatus] = useState<HealthStatus>("idle");
   const [groqMsg, setGroqMsg] = useState("");
@@ -59,6 +61,8 @@ export default function Settings() {
   const [inworldMsg, setInworldMsg] = useState("");
   const [renderStatus, setRenderStatus] = useState<HealthStatus>("idle");
   const [renderMsg, setRenderMsg] = useState("");
+  const [modalStatus, setModalStatus] = useState<HealthStatus>("idle");
+  const [modalMsg, setModalMsg] = useState("");
 
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [storageLoading, setStorageLoading] = useState(false);
@@ -144,6 +148,37 @@ export default function Settings() {
     }
   };
 
+  const testModal = async () => {
+    if (!settings.modalKey || !settings.modalSecret) {
+      setModalStatus("error"); setModalMsg("Modal Key and Secret required");
+      return;
+    }
+    setModalStatus("checking"); setModalMsg("");
+    try {
+      const res = await fetch("/api/gemini-proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate",
+          payload: {
+            userInput: { candidatesCount: 1, prompts: ["a small red circle on a white background"] },
+            aspectRatio: "1:1",
+            modalUrl: settings.modalImageUrl,
+            modalKey: settings.modalKey,
+            modalSecret: settings.modalSecret,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data?.status === 401 || data?.status === 403) { setModalStatus("error"); setModalMsg("Invalid Modal Key/Secret"); return; }
+      if (!res.ok || data?.status >= 400 || data?.data?.error) { setModalStatus("error"); setModalMsg(data?.data?.error || `HTTP ${data?.status ?? res.status}`); return; }
+      if (!data?.data?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage) { setModalStatus("error"); setModalMsg("No image returned"); return; }
+      setModalStatus("ok");
+    } catch (e: any) {
+      setModalStatus("error"); setModalMsg(e.message?.includes("fetch") ? "Network error" : e.message);
+    }
+  };
+
   const testRenderApi = async () => {
     setRenderStatus("checking"); setRenderMsg("");
     try {
@@ -156,7 +191,7 @@ export default function Settings() {
     }
   };
 
-  const testAll = () => { testGroq(); testGoogleCloud(); testInworld(); testRenderApi(); };
+  const testAll = () => { testGroq(); testGoogleCloud(); testInworld(); testRenderApi(); testModal(); };
 
   const fetchStorage = async () => {
     setStorageLoading(true);
@@ -497,6 +532,60 @@ export default function Settings() {
                   </SelectContent>
                 </Select>
               </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-foreground">Model Endpoint URL</label>
+                  <div className="flex items-center gap-2">
+                    <StatusIndicator status={modalStatus} message={modalMsg} />
+                    <Button variant="ghost" size="sm" onClick={testModal} className="text-xs h-7">
+                      {modalStatus === "checking" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
+                    </Button>
+                  </div>
+                </div>
+                <Input
+                  type="text"
+                  placeholder="https://your-app--z-image-turbo-api.modal.run"
+                  value={settings.modalImageUrl || ""}
+                  onChange={(e) => { setSettings(s => ({ ...s, modalImageUrl: e.target.value })); setModalStatus("idle"); }}
+                  className="bg-secondary"
+                />
+                <p className="text-xs text-muted-foreground">Modal-hosted image model endpoint. Change this to point at a different deployed model.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Modal Key</label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showModalKey ? "text" : "password"}
+                    placeholder="wk-..."
+                    value={settings.modalKey || ""}
+                    onChange={(e) => { setSettings(s => ({ ...s, modalKey: e.target.value })); setModalStatus("idle"); }}
+                    className="bg-secondary flex-1"
+                  />
+                  <Button variant="ghost" size="icon" onClick={() => setShowModalKey(!showModalKey)}>
+                    {showModalKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Modal Secret</label>
+                <div className="flex gap-2">
+                  <Input
+                    type={showModalSecret ? "text" : "password"}
+                    placeholder="ws-..."
+                    value={settings.modalSecret || ""}
+                    onChange={(e) => { setSettings(s => ({ ...s, modalSecret: e.target.value })); setModalStatus("idle"); }}
+                    className="bg-secondary flex-1"
+                  />
+                  <Button variant="ghost" size="icon" onClick={() => setShowModalSecret(!showModalSecret)}>
+                    {showModalSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Modal-Key / Modal-Secret auth headers for the endpoint above. Leave blank to use the server's MODAL_KEY / MODAL_SECRET env vars.</p>
+              </div>
+
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">Aspect Ratio</label>
                 <Select

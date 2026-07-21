@@ -40,18 +40,28 @@ export function getAccessToken(): string {
   }
 }
 
-export async function generateGeminiImage(prompt: string, aspectRatio = "16:9"): Promise<string> {
+export interface ModalOverrides {
+  url?: string;
+  key?: string;
+  secret?: string;
+}
+
+export async function generateGeminiImage(prompt: string, aspectRatio = "16:9", overrides?: ModalOverrides): Promise<string> {
   await acquireImagenSlot();
   try {
-    return await _generateWithModal(prompt, aspectRatio);
+    return await _generateWithModal(prompt, aspectRatio, overrides);
   } finally {
     releaseImagenSlot();
   }
 }
 
-async function _generateWithModal(prompt: string, aspectRatio: string): Promise<string> {
-  if (!MODAL_KEY || !MODAL_SECRET) {
-    throw new Error("MODAL_KEY / MODAL_SECRET not configured — set them in the server environment");
+async function _generateWithModal(prompt: string, aspectRatio: string, overrides?: ModalOverrides): Promise<string> {
+  const url = overrides?.url?.trim() || MODAL_ZIMAGE_URL;
+  const key = overrides?.key?.trim() || MODAL_KEY;
+  const secret = overrides?.secret?.trim() || MODAL_SECRET;
+
+  if (!key || !secret) {
+    throw new Error("Modal Key / Modal Secret not configured — set them in Settings or via MODAL_KEY / MODAL_SECRET on the server");
   }
 
   const ratio: AspectRatio = VALID_ASPECT_RATIOS.includes(aspectRatio as AspectRatio)
@@ -62,12 +72,12 @@ async function _generateWithModal(prompt: string, aspectRatio: string): Promise<
   let lastError = "";
 
   for (let attempt = 0; attempt <= delays.length; attempt++) {
-    const res = await fetch(MODAL_ZIMAGE_URL, {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Modal-Key": MODAL_KEY,
-        "Modal-Secret": MODAL_SECRET,
+        "Modal-Key": key,
+        "Modal-Secret": secret,
       },
       body: JSON.stringify({ prompt, aspect_ratio: ratio }),
       signal: AbortSignal.timeout(120_000),
@@ -80,7 +90,7 @@ async function _generateWithModal(prompt: string, aspectRatio: string): Promise<
     }
 
     const err = await res.text();
-    if (res.status === 401 || res.status === 403) throw new Error("Z-Image Turbo auth failed — check MODAL_KEY / MODAL_SECRET");
+    if (res.status === 401 || res.status === 403) throw new Error("Z-Image Turbo auth failed — check Modal Key / Modal Secret");
     if (res.status === 429) {
       lastError = `Rate limited (attempt ${attempt + 1})`;
       if (attempt < delays.length) {

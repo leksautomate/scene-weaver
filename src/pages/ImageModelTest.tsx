@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Play, RotateCcw, Download, FlaskConical } from "lucide-react";
-import { ASPECT_RATIOS } from "@/lib/providers";
+import { ASPECT_RATIOS, loadProviderSettings, generateGeminiImage } from "@/lib/providers";
 
 type Status = "idle" | "generating" | "done" | "failed";
 
@@ -26,24 +26,13 @@ export default function ImageModelTest() {
     setError(undefined);
     const t0 = Date.now();
     try {
-      const res = await fetch("/api/gemini-proxy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "generate",
-          payload: {
-            userInput: { candidatesCount: 1, prompts: [prompt] },
-            aspectRatio,
-          },
-        }),
+      const settings = loadProviderSettings();
+      const blob = await generateGeminiImage(prompt, aspectRatio, {
+        url: settings.modalImageUrl,
+        key: settings.modalKey,
+        secret: settings.modalSecret,
       });
-      const json = await res.json();
-
-      const encoded = json.data?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage;
-      if (!encoded) throw new Error(json.data?.error || "No image returned");
-
-      const url = `data:image/png;base64,${encoded}`;
-      setImageUrl(url);
+      setImageUrl(URL.createObjectURL(blob));
       setStatus("done");
       setDurationMs(Date.now() - t0);
     } catch (e: any) {
