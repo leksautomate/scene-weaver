@@ -289,7 +289,8 @@ export async function runClientSidePipeline(
         const fd = new FormData();
         fd.append("file", imageBlob!, `${num}.png`);
         const ext = "png";
-        await fetch(`${API_BASE}/assets/${serverProjectId}/images/${num}.${ext}`, { method: "POST", body: fd });
+        const uploadRes = await fetch(`${API_BASE}/assets/${serverProjectId}/images/${num}.${ext}`, { method: "POST", body: fd });
+        if (!uploadRes.ok) throw new Error(`Image upload failed: HTTP ${uploadRes.status}`);
 
         await fetch(`${API_BASE}/projects/${serverProjectId}/scenes/${num}`, {
           method: "PATCH",
@@ -344,7 +345,8 @@ export async function runClientSidePipeline(
 
         const fd = new FormData();
         fd.append("file", audioBlob!, `${num}.mp3`);
-        await fetch(`${API_BASE}/assets/${serverProjectId}/audio/${num}.mp3`, { method: "POST", body: fd });
+        const audioUploadRes = await fetch(`${API_BASE}/assets/${serverProjectId}/audio/${num}.mp3`, { method: "POST", body: fd });
+        if (!audioUploadRes.ok) throw new Error(`Audio upload failed: HTTP ${audioUploadRes.status}`);
 
         if (ttsTimestampInfo) {
           const jsonBlob = new Blob([JSON.stringify(ttsTimestampInfo)], { type: "application/json" });
@@ -441,7 +443,8 @@ export async function regenerateAssetFrontend(
       const ext = "png";
       const fd = new FormData();
       fd.append("file", imageBlob!, `${sceneNumber}.${ext}`);
-      await fetch(`${API_BASE}/assets/${projectId}/images/${sceneNumber}.${ext}`, { method: "POST", body: fd });
+      const uploadRes = await fetch(`${API_BASE}/assets/${projectId}/images/${sceneNumber}.${ext}`, { method: "POST", body: fd });
+      if (!uploadRes.ok) throw new Error(`Image upload failed: HTTP ${uploadRes.status}`);
 
       await fetch(`${API_BASE}/projects/${projectId}/scenes/${sceneNumber}`, {
         method: "PATCH",
@@ -475,7 +478,8 @@ export async function regenerateAssetFrontend(
 
       const fd = new FormData();
       fd.append("file", audioBlob, `${sceneNumber}.mp3`);
-      await fetch(`${API_BASE}/assets/${projectId}/audio/${sceneNumber}.mp3`, { method: "POST", body: fd });
+      const audioUploadRes = await fetch(`${API_BASE}/assets/${projectId}/audio/${sceneNumber}.mp3`, { method: "POST", body: fd });
+      if (!audioUploadRes.ok) throw new Error(`Audio upload failed: HTTP ${audioUploadRes.status}`);
 
       if (ttsTimestampInfo) {
         const jsonBlob = new Blob([JSON.stringify(ttsTimestampInfo)], { type: "application/json" });
@@ -659,9 +663,63 @@ export async function checkAndFixImages(
   return bad;
 }
 
+// HEAD-check that an audio file actually exists on disk and isn't empty
+function isAudioValid(projectId: string, scene: { audio_file?: string | null; scene_number: number }): Promise<boolean> {
+  const filename = scene.audio_file || `${scene.scene_number}.mp3`;
+  const url = getAssetUrl(projectId, "audio", filename);
+  return fetch(`${url}?v=${Date.now()}`, { method: "HEAD" })
+    .then(res => {
+      if (!res.ok) return false;
+      const len = res.headers.get("content-length");
+      return len === null || parseInt(len, 10) > 0;
+    })
+    .catch(() => false);
+}
+
+export async function checkAndFixAudio(
+  projectId: string,
+  scenes: Array<{ scene_number: number; audio_status: string; audio_file?: string | null }>,
+  onProgress: (done: number, total: number, bad: number) => void
+): Promise<number> {
+  const completed = scenes.filter(s => s.audio_status === "completed");
+  let done = 0;
+  let bad = 0;
+  for (const scene of completed) {
+    const ok = await isAudioValid(projectId, scene);
+    if (!ok) {
+      bad++;
+      await fetch(`${API_BASE}/projects/${projectId}/scenes/${scene.scene_number}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audio_status: "failed",
+          audio_error: "Audio missing or invalid — needs regeneration",
+          needs_review: true,
+        }),
+      });
+    }
+    done++;
+    onProgress(done, completed.length, bad);
+  }
+  return bad;
+}
+
+export async function verifyAllAssets(
+  projectId: string,
+  scenes: Array<{ scene_number: number; image_status: string; image_file?: string | null; audio_status: string; audio_file?: string | null }>,
+  onProgress: (done: number, total: number, bad: number) => void
+): Promise<{ badImages: number; badAudio: number }> {
+  const imageTotal = scenes.filter(s => s.image_status === "completed").length;
+  const audioTotal = scenes.filter(s => s.audio_status === "completed").length;
+  const total = imageTotal + audioTotal;
+  const badImages = await checkAndFixImages(projectId, scenes, (done, _t, bad) => onProgress(done, total, bad));
+  const badAudio = await checkAndFixAudio(projectId, scenes, (done, _t, bad) => onProgress(imageTotal + done, total, badImages + bad));
+  return { badImages, badAudio };
+}
+
 export type VideoResolution = "480p" | "720p" | "1080p" | "1440p";
 
-export async function startClipGeneration(projectId: string, resolution: VideoResolution): Promise<{ total: number; resolution: string }> {
+export async function startClipGeneration(projectId: string, resolution: VideoResolution): Promise<{ total: number; resolution: string; missingFiles?: number[] }> {
   const settings = loadProviderSettings();
   const subtitleDelay = settings.subtitleDelay ?? 0.8;
   const overlayPosition = settings.overlayPosition ?? "bottom-left";
@@ -682,6 +740,7 @@ export async function getClipStatus(projectId: string): Promise<{
   total: number;
   resolution?: string;
   error?: string;
+  skipped?: Array<{ scene: number; reason: string }>;
 }> {
   return apiRequest(`/render/${projectId}/clips/status`);
 }
@@ -710,6 +769,7 @@ export async function getRenderStatus(projectId: string): Promise<{
   total: number;
   resolution?: string;
   error?: string;
+  skipped?: Array<{ scene: number; reason: string }>;
 }> {
   return apiRequest(`/render/${projectId}/status`);
 }

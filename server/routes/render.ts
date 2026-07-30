@@ -129,6 +129,8 @@ type AutoJob = {
 };
 const autoJobs: Record<string, AutoJob> = {};
 
+type SkippedScene = { scene: number; reason: string };
+
 type ClipJob = {
   status: "generating" | "done" | "failed";
   progress: number; // 0–100
@@ -136,6 +138,7 @@ type ClipJob = {
   total: number;
   resolution: string;
   error?: string;
+  skipped?: SkippedScene[];
 };
 
 type MergeJob = {
@@ -144,6 +147,7 @@ type MergeJob = {
   total: number;
   resolution: string;
   error?: string;
+  skipped?: SkippedScene[];
 };
 
 const clipJobs: Record<string, ClipJob> = {};
@@ -514,6 +518,31 @@ function findImageFile(projectId: string, sceneNumber: number, dbFile?: string |
   return candidates.find(p => fs.existsSync(p)) ?? null;
 }
 
+/**
+ * Cross-checks scenes the DB says are "completed" against what's actually on disk.
+ * DB status alone is not trustworthy — a scene can be marked completed with no file
+ * written (failed upload) or a file that was later removed.
+ */
+function verifyScenesOnDisk<T extends { scene_number: number; image_file?: string | null; audio_file?: string | null }>(
+  projectId: string,
+  readyScenes: T[]
+): { verified: T[]; missing: SkippedScene[] } {
+  const verified: T[] = [];
+  const missing: SkippedScene[] = [];
+  for (const s of readyScenes) {
+    const img = findImageFile(projectId, s.scene_number, s.image_file);
+    const audioPath = path.join("uploads", projectId, "audio", s.audio_file ?? `${s.scene_number}.mp3`);
+    if (!img) {
+      missing.push({ scene: s.scene_number, reason: "image file missing on disk" });
+    } else if (!fs.existsSync(audioPath)) {
+      missing.push({ scene: s.scene_number, reason: "audio file missing on disk" });
+    } else {
+      verified.push(s);
+    }
+  }
+  return { verified, missing };
+}
+
 function hasAudioStream(file: string): boolean {
   try {
     const out = execSync(
@@ -582,6 +611,13 @@ router.post("/:id/clips", async (req: Request, res: Response) => {
     if (ready.length === 0)
       return res.status(400).json({ error: "No scenes ready — need completed image AND audio for each scene." });
 
+    const { verified, missing } = verifyScenesOnDisk(projectId, ready);
+    if (verified.length === 0)
+      return res.status(400).json({
+        error: "All 'ready' scenes are missing files on disk — run Verify Assets and regenerate before rendering.",
+        missingFiles: missing.map(m => m.scene),
+      });
+
     const resKey = RESOLUTIONS[req.body?.resolution] ? req.body.resolution : "720p";
     const projectAR: string = (project.settings as any)?.aspectRatio || "16:9";
     const [W, H] = resolveOutputSize(resKey, projectAR);
@@ -591,11 +627,11 @@ router.post("/:id/clips", async (req: Request, res: Response) => {
     const overlayFontSize = req.body?.overlayFontSize !== undefined ? parseInt(req.body.overlayFontSize, 10) : 36;
     const veoAudioVolume = req.body?.veoAudioVolume !== undefined ? parseFloat(req.body.veoAudioVolume) : 0.03;
 
-    clipJobs[projectId] = { status: "generating", progress: 0, done: 0, total: ready.length, resolution: resKey };
-    await upsertJobStatus(projectId, "clip", "running", { resolution: resKey, total: ready.length });
-    res.json({ success: true, total: ready.length, resolution: resKey });
+    clipJobs[projectId] = { status: "generating", progress: 0, done: 0, total: verified.length, resolution: resKey, skipped: [...missing] };
+    await upsertJobStatus(projectId, "clip", "running", { resolution: resKey, total: verified.length });
+    res.json({ success: true, total: verified.length, resolution: resKey, missingFiles: missing.map(m => m.scene) });
 
-    generateClips(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume).catch(e => {
+    generateClips(projectId, verified, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume).catch(e => {
       console.error(`[clips] ${projectId} failed:`, e.message);
       clipJobs[projectId] = { ...clipJobs[projectId], status: "failed", error: e.message };
       upsertJobStatus(projectId, "clip", "failed", { error: e.message });
@@ -1179,6 +1215,7 @@ async function generateClips(
 
       if (!img || !fs.existsSync(audioPath)) {
         console.warn(`[clips] scene ${num}: missing files, skipping`);
+        (clipJobs[projectId].skipped ??= []).push({ scene: num, reason: !img ? "image file missing on disk" : "audio file missing on disk" });
       } else {
         const dur = parseFloat(getAudioDuration(audioPath).toFixed(3));
         const clipPath = path.join(clipsDir, `${num}.mp4`);
@@ -1202,6 +1239,7 @@ async function generateClips(
           console.log(`[clips] ${projectId}: scene ${num} done (${counters.done}/${total})`);
         } catch (e: any) {
           console.error(`[clips] scene ${num} failed — skipping:`, e.message);
+          (clipJobs[projectId].skipped ??= []).push({ scene: num, reason: e.message });
           try { fs.unlinkSync(clipPath); } catch {}
         }
       }
@@ -1376,6 +1414,7 @@ async function mergeVideo(
       const audioPath = path.join("uploads", projectId, "audio", s.audio_file ?? `${num}.mp3`);
       if (!img || !fs.existsSync(audioPath)) {
         console.warn(`[merge] scene ${num}: missing image or audio, cannot generate clip. Skipping scene.`);
+        (mergeJobs[projectId].skipped ??= []).push({ scene: num, reason: !img ? "image file missing on disk" : "audio file missing on disk" });
         mergeJobs[projectId].progress = Math.round(((i + 1) / sceneList.length) * 78);
         continue;
       }
@@ -1396,6 +1435,7 @@ async function mergeVideo(
         isValid = true;
       } catch (e: any) {
         console.error(`[merge] failed to regenerate clip for scene ${num}:`, e.message);
+        (mergeJobs[projectId].skipped ??= []).push({ scene: num, reason: e.message });
         mergeJobs[projectId].progress = Math.round(((i + 1) / sceneList.length) * 78);
         continue;
       }
@@ -1486,7 +1526,7 @@ async function mergeVideo(
 
   // Pre-generated and regenerated clips are stored persistently in clipsDir. No tempClips to clean up.
 
-  mergeJobs[projectId] = { status: "done", progress: 100, total: sceneList.length, resolution: mergeJobs[projectId].resolution };
+  mergeJobs[projectId] = { ...mergeJobs[projectId], status: "done", progress: 100, total: sceneList.length };
   await upsertJobStatus(projectId, "merge", "done", { total: sceneList.length });
   console.log(`[merge] ${projectId}: done → ${outPath}`);
 }
@@ -1535,15 +1575,24 @@ async function runAutoPipeline(
     return;
   }
 
-  console.log(`[auto] ${projectId}: ${ready.length} scenes ready → generating clips`);
+  const { verified, missing } = verifyScenesOnDisk(projectId, ready);
+  if (missing.length > 0) {
+    console.warn(`[auto] ${projectId}: ${missing.length} scene(s) marked completed but missing files on disk — skipping`, missing);
+  }
+  if (verified.length === 0) {
+    autoJobs[projectId] = { ...autoJobs[projectId], status: "failed", error: "All 'ready' scenes are missing files on disk" };
+    return;
+  }
+
+  console.log(`[auto] ${projectId}: ${verified.length} scenes ready → generating clips`);
   autoJobs[projectId].status = "generating_clips";
-  clipJobs[projectId] = { status: "generating", progress: 0, done: 0, total: ready.length, resolution: resKey };
-  await generateClips(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume);
+  clipJobs[projectId] = { status: "generating", progress: 0, done: 0, total: verified.length, resolution: resKey, skipped: [...missing] };
+  await generateClips(projectId, verified, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume);
 
   console.log(`[auto] ${projectId}: clips done → merging`);
   autoJobs[projectId].status = "merging";
-  mergeJobs[projectId] = { status: "rendering", progress: 0, total: ready.length, resolution: resKey };
-  await mergeVideo(projectId, ready, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume);
+  mergeJobs[projectId] = { status: "rendering", progress: 0, total: verified.length, resolution: resKey, skipped: [...missing] };
+  await mergeVideo(projectId, verified, W, H, subtitleDelay, overlayPosition, overlayFont, overlayFontSize, veoAudioVolume);
 
   autoJobs[projectId].status = "done";
   await upsertJobStatus(projectId, "auto", "done");

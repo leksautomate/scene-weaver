@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
-import { getProject, getAssetUrl, getDownloadUrl, regenerateAssetFrontend, bulkRegeneratePending, startClipGeneration, getClipStatus, getClipsZipUrl, startRender, getRenderStatus, getRenderDownloadUrl, startAnimateScenes, getAnimateStatus, getAnimateZipUrl } from "@/lib/api";
+import { getProject, getAssetUrl, getDownloadUrl, regenerateAssetFrontend, bulkRegeneratePending, bulkRegenerateFailed, verifyAllAssets, startClipGeneration, getClipStatus, getClipsZipUrl, startRender, getRenderStatus, getRenderDownloadUrl, startAnimateScenes, getAnimateStatus, getAnimateZipUrl } from "@/lib/api";
 import { regenerateImagePrompt } from "@/lib/providers";
 import type { Scene } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import {
   Volume2, VolumeX, Loader2, RefreshCw, Sparkles,
   PanelRightOpen, PanelRightClose, Save, Image as ImageIcon,
   Film, Download, CheckCircle2, AlertTriangle, FolderDown, Merge,
-  Video, VideoOff,
+  Video, VideoOff, ScanSearch,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Slider } from "@/components/ui/slider";
@@ -43,6 +43,7 @@ export default function ProjectPreview() {
   const [clipDone, setClipDone] = useState(0);
   const [clipTotal, setClipTotal] = useState(0);
   const [clipError, setClipError] = useState<string | null>(null);
+  const [clipSkipped, setClipSkipped] = useState<Array<{ scene: number; reason: string }>>([]);
   const clipPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [renderStatus, setRenderStatus] = useState<"idle" | "rendering" | "done" | "failed">("idle");
@@ -50,7 +51,11 @@ export default function ProjectPreview() {
   const [renderTotal, setRenderTotal] = useState(0);
   const [renderResolution, setRenderResolution] = useState<import("@/lib/api").VideoResolution>("1080p");
   const [renderError, setRenderError] = useState<string | null>(null);
+  const [renderSkipped, setRenderSkipped] = useState<Array<{ scene: number; reason: string }>>([]);
   const renderPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [verifyingAssets, setVerifyingAssets] = useState(false);
+  const [verifyProgress, setVerifyProgress] = useState({ done: 0, total: 0, bad: 0 });
 
   const [animateSelected, setAnimateSelected] = useState<Set<number>>(new Set());
   const [animateStatus, setAnimateStatus] = useState<"idle" | "animating" | "done" | "failed">("idle");
@@ -418,6 +423,35 @@ export default function ProjectPreview() {
     }
   };
 
+  const handleVerifyAssets = async () => {
+    if (!projectId) return;
+    setVerifyingAssets(true);
+    setVerifyProgress({ done: 0, total: 0, bad: 0 });
+    try {
+      const { badImages, badAudio } = await verifyAllAssets(projectId, scenes, (done, total, bad) => {
+        setVerifyProgress({ done, total, bad });
+      });
+      const totalBad = badImages + badAudio;
+      if (totalBad === 0) {
+        toast.success("All assets verified — no issues found.");
+        return;
+      }
+      toast.warning(`Found ${totalBad} broken/missing asset(s) — regenerating...`);
+      const { scenes: refreshed } = await getProject(projectId);
+      const toFix = refreshed.filter(s => s.image_status === "failed" || s.audio_status === "failed");
+      await bulkRegenerateFailed(projectId, toFix, (done, total) => {
+        setVerifyProgress({ done, total, bad: totalBad });
+        fetchData();
+      });
+      toast.success(`Verified and regenerated ${totalBad} scene asset(s).`);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setVerifyingAssets(false);
+      fetchData();
+    }
+  };
+
   const startClipPolling = (pid: string) => {
     if (clipPollRef.current) clearInterval(clipPollRef.current);
     clipPollRef.current = setInterval(async () => {
@@ -426,10 +460,15 @@ export default function ProjectPreview() {
         setClipProgress(s.progress ?? 0);
         if (s.done !== undefined) setClipDone(s.done);
         if (s.total) setClipTotal(s.total);
+        if (s.skipped) setClipSkipped(s.skipped);
         if (s.status === "done") {
           setClipStatus("done");
           clearInterval(clipPollRef.current!);
-          toast.success(`${s.total ?? s.done} clips ready! Download as ZIP or merge into one video.`);
+          if (s.skipped && s.skipped.length > 0) {
+            toast.warning(`${s.total ?? s.done} clips ready, but ${s.skipped.length} scene(s) were skipped — missing files. Run Verify Assets, then re-render.`, { duration: 10000 });
+          } else {
+            toast.success(`${s.total ?? s.done} clips ready! Download as ZIP or merge into one video.`);
+          }
         } else if (s.status === "failed") {
           setClipStatus("failed");
           setClipError(s.error ?? "Unknown error");
@@ -445,11 +484,17 @@ export default function ProjectPreview() {
     setClipError(null);
     setClipStatus("generating");
     setClipProgress(0);
+    setClipSkipped([]);
     try {
-      const { total } = await startClipGeneration(projectId, renderResolution);
+      const { total, missingFiles } = await startClipGeneration(projectId, renderResolution);
       setClipTotal(total);
       setClipDone(0);
-      toast.success(`Generating ${total} clips at ${renderResolution}…`);
+      if (missingFiles && missingFiles.length > 0) {
+        setClipSkipped(missingFiles.map(scene => ({ scene, reason: "file missing on disk" })));
+        toast.warning(`Generating ${total} clips — ${missingFiles.length} scene(s) excluded (missing files). Run Verify Assets to fix.`, { duration: 10000 });
+      } else {
+        toast.success(`Generating ${total} clips at ${renderResolution}…`);
+      }
       startClipPolling(projectId);
     } catch (e: any) {
       setClipStatus("failed");
@@ -465,10 +510,15 @@ export default function ProjectPreview() {
         const s = await getRenderStatus(pid);
         setRenderProgress(s.progress ?? 0);
         if (s.total) setRenderTotal(s.total);
+        if (s.skipped) setRenderSkipped(s.skipped);
         if (s.status === "done") {
           setRenderStatus("done");
           clearInterval(renderPollRef.current!);
-          toast.success("Video rendered! Ready to download.");
+          if (s.skipped && s.skipped.length > 0) {
+            toast.warning(`Video rendered, but ${s.skipped.length} scene(s) were skipped — missing files. Run Verify Assets, then re-render.`, { duration: 10000 });
+          } else {
+            toast.success("Video rendered! Ready to download.");
+          }
         } else if (s.status === "failed") {
           setRenderStatus("failed");
           setRenderError(s.error ?? "Unknown error");
@@ -484,6 +534,7 @@ export default function ProjectPreview() {
     setRenderError(null);
     setRenderStatus("rendering");
     setRenderProgress(0);
+    setRenderSkipped([]);
     try {
       const { total } = await startRender(projectId, renderResolution);
       setRenderTotal(total);
@@ -648,6 +699,20 @@ export default function ProjectPreview() {
               </Button>
             )}
 
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleVerifyAssets}
+              disabled={verifyingAssets || bulkGenerating || regenImage}
+              title="Check every completed scene's image and audio file actually exists on disk, and regenerate any that are missing or broken"
+            >
+              {verifyingAssets ? (
+                <><Loader2 className="h-3 w-3 animate-spin mr-1" />Verifying {verifyProgress.done}/{verifyProgress.total}{verifyProgress.bad > 0 ? ` (${verifyProgress.bad} bad)` : ""}</>
+              ) : (
+                <><ScanSearch className="h-3 w-3 mr-1" />Verify Assets</>
+              )}
+            </Button>
+
             {/* Failed scenes indicator */}
             {(failedImages.length > 0 || failedAudios.length > 0) && (
               <Button
@@ -736,6 +801,23 @@ export default function ProjectPreview() {
                 <AlertTriangle className="h-3 w-3 text-destructive" title={animateError ?? ""} />
                 <Button size="sm" variant="outline" onClick={() => setAnimateStatus("idle")}>Retry Veo</Button>
               </div>
+            )}
+
+            {/* Skipped-scene warning — surfaces scenes dropped from the last render due to missing files */}
+            {(clipSkipped.length > 0 || renderSkipped.length > 0) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs text-destructive border-destructive/50"
+                onClick={() => {
+                  const list = (renderSkipped.length > 0 ? renderSkipped : clipSkipped)
+                    .map(s => `Scene ${s.scene}: ${s.reason}`).join("\n");
+                  toast.error(list, { duration: 12000 });
+                }}
+              >
+                <AlertTriangle className="h-3 w-3 mr-1" />
+                {(renderSkipped.length > 0 ? renderSkipped : clipSkipped).length} scene(s) skipped — view
+              </Button>
             )}
 
             {/* Phase 1: Generate Clips */}
