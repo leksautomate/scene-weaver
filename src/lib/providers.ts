@@ -38,9 +38,7 @@ export const OVERLAY_FONTS = [
 export interface ProviderSettings {
   imageProvider: string;
   aspectRatio: "16:9" | "1:1" | "9:16";
-  modalImageUrl: string;
-  modalKey: string;
-  modalSecret: string;
+  arkApiKey: string;
   ttsProvider: string;
   voiceId: string;
   modelId: string;
@@ -51,7 +49,8 @@ export interface ProviderSettings {
   claudeModel: string;
   geminiModel: string;
   groqModel: string;
-  textProvider: "groq" | "claude" | "inworld" | "gemini";
+  deepseekModel: string;
+  textProvider: "groq" | "claude" | "inworld" | "gemini" | "deepseek";
   inworldApiKey: string;
   customVoices: CustomVoice[];
   skipImageGeneration: boolean;
@@ -105,9 +104,7 @@ export function getAvailableVoices(settings: ProviderSettings): InworldVoice[] {
 const DEFAULTS: ProviderSettings = {
   imageProvider: "gemini",
   aspectRatio: "16:9",
-  modalImageUrl: "https://leksautomate--z-image-turbo-api.modal.run",
-  modalKey: "",
-  modalSecret: "",
+  arkApiKey: "",
   ttsProvider: "inworld",
   voiceId: "Dennis",
   modelId: "inworld-tts-1.5-max",
@@ -118,6 +115,7 @@ const DEFAULTS: ProviderSettings = {
   claudeModel: "claude-sonnet-4-6",
   geminiModel: "gemini-3.1-pro-preview",
   groqModel: "llama-3.3-70b-versatile",
+  deepseekModel: "deepseek-v3-2-251201",
   textProvider: "groq",
   inworldApiKey: "",
   customVoices: [],
@@ -742,6 +740,70 @@ async function callGeminiForBatch(
   }
 }
 
+async function callDeepseekForBatch(
+  title: string,
+  scenes: Array<{ scene_number: number; script_text: string }>,
+  arkApiKey: string,
+  retryOnRateLimit = true,
+  stylePrompt?: string,
+  deepseekModel?: string,
+  visualTheme?: "impasto" | "ww2"
+): Promise<BatchPromptResult[]> {
+  const basePrompt = visualTheme === "ww2" ? BATCH_WWII_IMAGE_PROMPT : BATCH_IMAGE_PROMPT;
+  const systemPrompt = stylePrompt
+    ? `${basePrompt}\n\n---\nADDITIONAL STYLE DIRECTION (follow these instructions for all image prompts):\n${stylePrompt}`
+    : basePrompt;
+  const scenesText = scenes
+    .map(s => `Scene ${s.scene_number}: "${s.script_text}"`)
+    .join("\n");
+
+  const userPrompt = `Video Title: ${title}\n\nGenerate image prompts for these ${scenes.length} scenes:\n\n${scenesText}\n\nReturn ONLY the JSON object.`;
+
+  const result = await apiProxy({
+    action: "deepseek-chat",
+    apiKey: arkApiKey,
+    payload: {
+      model: deepseekModel || "deepseek-v3-2-251201",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 8000,
+    },
+  });
+
+  if (result.status && result.status >= 400) {
+    const errText = typeof result.data === "string"
+      ? result.data
+      : JSON.stringify(result.data || {}).substring(0, 500);
+    if (result.status === 429) {
+      if (retryOnRateLimit) {
+        console.log("[deepseek] Rate limited — waiting 15s before retry...");
+        await delay(15000);
+        return callDeepseekForBatch(title, scenes, arkApiKey, false, stylePrompt, deepseekModel, visualTheme);
+      }
+      throw new Error("DeepSeek rate limited — try again in a moment.");
+    }
+    if (result.status === 401) throw new Error("BytePlus Ark API key is invalid. Update it in Settings.");
+    throw new Error(`DeepSeek API error (HTTP ${result.status}): ${errText.substring(0, 200)}`);
+  }
+
+  const data = result.data;
+  let content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("No content from DeepSeek");
+  content = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+
+  try {
+    const parsed = JSON.parse(content);
+    return parsed.scenes || [];
+  } catch (err: any) {
+    const recovered = recoverPartialScenes(content);
+    if (recovered.length > 0) return recovered;
+    throw new Error(`DeepSeek returned malformed JSON (${content.length} chars): ${err.message}. Try reducing batch size.`);
+  }
+}
+
 export async function generateScenesForChunk(
   title: string,
   chunk: string,
@@ -754,9 +816,11 @@ export async function generateScenesForChunk(
   googleCloudApiKey?: string,
   claudeModel?: string,
   inworldApiKey?: string,
-  textProvider?: "groq" | "claude" | "inworld" | "gemini",
+  textProvider?: "groq" | "claude" | "inworld" | "gemini" | "deepseek",
   visualTheme?: "impasto" | "ww2",
-  geminiModel?: string
+  geminiModel?: string,
+  arkApiKey?: string,
+  deepseekModel?: string
 ): Promise<SceneManifest[]> {
   const sceneChunks = (splitMode === "duration"
     ? splitScriptByDuration(chunk)
@@ -771,7 +835,9 @@ export async function generateScenesForChunk(
       ? await callClaudeForBatch(title, sceneChunks, googleCloudApiKey || "", true, stylePrompt, claudeModel, visualTheme)
       : useProvider === "gemini"
         ? await callGeminiForBatch(title, sceneChunks, googleCloudApiKey || "", true, stylePrompt, geminiModel, visualTheme)
-        : await callGroqForBatch(title, sceneChunks, groqApiKeys, stylePrompt, visualTheme);
+        : useProvider === "deepseek"
+          ? await callDeepseekForBatch(title, sceneChunks, arkApiKey || "", true, stylePrompt, deepseekModel, visualTheme)
+          : await callGroqForBatch(title, sceneChunks, groqApiKeys, stylePrompt, visualTheme);
 
   return sceneChunks.map((sc, idx) => {
     const p = prompts[idx] || {} as BatchPromptResult;
@@ -802,9 +868,11 @@ export async function generateSceneManifest(
   googleCloudApiKey?: string,
   claudeModel?: string,
   inworldApiKey?: string,
-  textProvider?: "groq" | "claude" | "inworld" | "gemini",
+  textProvider?: "groq" | "claude" | "inworld" | "gemini" | "deepseek",
   visualTheme?: "impasto" | "ww2",
-  geminiModel?: string
+  geminiModel?: string,
+  arkApiKey?: string,
+  deepseekModel?: string
 ): Promise<SceneManifest[]> {
   const sceneChunks = splitMode === "duration"
     ? splitScriptByDuration(script)
@@ -827,7 +895,9 @@ export async function generateSceneManifest(
         ? await callClaudeForBatch(title, batch, googleCloudApiKey || "", true, stylePrompt, claudeModel, visualTheme)
         : useProvider === "gemini"
           ? await callGeminiForBatch(title, batch, googleCloudApiKey || "", true, stylePrompt, geminiModel, visualTheme)
-          : await callGroqForBatch(title, batch, groqApiKeys, stylePrompt, visualTheme);
+          : useProvider === "deepseek"
+            ? await callDeepseekForBatch(title, batch, arkApiKey || "", true, stylePrompt, deepseekModel, visualTheme)
+            : await callGroqForBatch(title, batch, groqApiKeys, stylePrompt, visualTheme);
 
     const merged: SceneManifest[] = batch.map((sc, idx) => {
       const p = prompts[idx] || {} as BatchPromptResult;
@@ -854,18 +924,16 @@ export async function generateSceneManifest(
 }
 
 // ========================
-// Z-Image Turbo — Image generation
+// BytePlus Ark (Seedream) — Image generation
 // ========================
 
-export async function generateGeminiImage(prompt: string, aspectRatio?: string, modal?: { url?: string; key?: string; secret?: string }): Promise<Blob> {
+export async function generateGeminiImage(prompt: string, aspectRatio?: string, arkApiKey?: string): Promise<Blob> {
   const genResult = await apiProxy({
     action: "generate",
     payload: {
       userInput: { candidatesCount: 1, prompts: [prompt] },
       aspectRatio: aspectRatio || "16:9",
-      modalUrl: modal?.url || undefined,
-      modalKey: modal?.key || undefined,
-      modalSecret: modal?.secret || undefined,
+      arkApiKey: arkApiKey || undefined,
     },
   });
 
@@ -947,10 +1015,12 @@ export async function regenerateImagePrompt(
   googleCloudApiKey?: string,
   claudeModel?: string,
   inworldApiKey?: string,
-  textProvider?: "groq" | "claude" | "inworld" | "gemini",
+  textProvider?: "groq" | "claude" | "inworld" | "gemini" | "deepseek",
   visualTheme?: "impasto" | "ww2",
   geminiModel?: string,
-  stylePrompt?: string
+  stylePrompt?: string,
+  arkApiKey?: string,
+  deepseekModel?: string
 ): Promise<string> {
   const baseSystem = visualTheme === "ww2"
     ? `You are a visual content director generating a single image prompt for a WWII documentary scene.
@@ -1075,6 +1145,33 @@ Return ONLY the prompt text — one sentence ending with a period. No JSON, no m
       content = result.data?.choices?.[0]?.message?.content;
     }
     if (!content) throw new Error("No content from Gemini");
+    return content.trim();
+  }
+
+  if (useProvider === "deepseek") {
+    const result = await apiProxy({
+      action: "deepseek-chat",
+      apiKey: arkApiKey || "",
+      payload: {
+        model: deepseekModel || "deepseek-v3-2-251201",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.4,
+        max_tokens: 1000,
+      },
+    });
+
+    if (result.status && result.status >= 400) {
+      const errText = typeof result.data === "string"
+        ? result.data
+        : JSON.stringify(result.data || {}).substring(0, 500);
+      throw new Error(`DeepSeek error: ${result.status} - ${errText}`);
+    }
+
+    const content = result.data?.choices?.[0]?.message?.content;
+    if (!content) throw new Error("No content from DeepSeek");
     return content.trim();
   }
 

@@ -18,7 +18,7 @@ const DURATION_OPTIONS = [
 ] as const;
 
 type Style = "impasto" | "ww2" | "doodle" | "custom";
-type Provider = "groq" | "inworld" | "claude" | "gemini";
+type Provider = "groq" | "inworld" | "claude" | "gemini" | "deepseek";
 
 interface JobProgress {
   phase: "pass1" | "pass2";
@@ -32,10 +32,11 @@ interface JobParams {
   script: string;
   secondsPerScene: number;
   style: "impasto" | "ww2" | "doodle" | "custom";
-  provider: "groq" | "inworld" | "claude" | "gemini";
+  provider: "groq" | "inworld" | "claude" | "gemini" | "deepseek";
   apiKey?: string;
   claudeModel?: string;
   geminiModel?: string;
+  deepseekModel?: string;
 }
 
 interface Job {
@@ -214,9 +215,11 @@ export default function ScriptToJson() {
   const apiKey = provider === "groq"
     ? (settings.groqApiKeys?.find(k => k?.trim()) || "")
     : provider === "claude"
-    ? settings.googleCloudApiKey 
+    ? settings.googleCloudApiKey
     : provider === "gemini"
     ? settings.googleCloudApiKey
+    : provider === "deepseek"
+    ? settings.arkApiKey
     : settings.inworldApiKey;
   
   const generating = useMemo(() => selectedJob?.status === "running", [selectedJob]);
@@ -238,6 +241,7 @@ export default function ScriptToJson() {
           claudeModel: settings.claudeModel,
           geminiModel: settings.geminiModel,
           groqModel: settings.groqModel,
+          deepseekModel: settings.deepseekModel,
           stylePrompt: stylePrompt.trim(),
         }),
       });
@@ -485,9 +489,9 @@ export default function ScriptToJson() {
               <label className="text-xs font-medium text-primary uppercase tracking-wide block mb-2">
                 AI Provider
               </label>
-              <div className="grid grid-cols-4 gap-2">
-                {(["groq", "inworld", "claude", "gemini"] as const).map((p) => {
-                  const key = p === "groq" ? (settings.groqApiKeys?.find(k => k?.trim()) || "") : p === "claude" || p === "gemini" ? settings.googleCloudApiKey : settings.inworldApiKey;
+              <div className="grid grid-cols-5 gap-2">
+                {(["groq", "inworld", "claude", "gemini", "deepseek"] as const).map((p) => {
+                  const key = p === "groq" ? (settings.groqApiKeys?.find(k => k?.trim()) || "") : p === "claude" || p === "gemini" ? settings.googleCloudApiKey : p === "deepseek" ? settings.arkApiKey : settings.inworldApiKey;
                   const isVertex = p === "claude" || p === "gemini";
                   return (
                     <button
@@ -502,7 +506,7 @@ export default function ScriptToJson() {
                     >
                       <div>
                         <div className="text-xs font-semibold">
-                          {p === "groq" ? "Groq" : p === "inworld" ? "Inworld" : p === "claude" ? "Claude" : "Gemini"}
+                          {p === "groq" ? "Groq" : p === "inworld" ? "Inworld" : p === "claude" ? "Claude" : p === "gemini" ? "Gemini" : "DeepSeek"}
                         </div>
                         <div className="text-[9px] text-muted-foreground mt-0.5 leading-tight">
                           {p === "groq" ? "Batch 8" : p === "inworld" ? "Batch 15" : p === "claude" ? "Batch 5" : "Batch 10"}
@@ -527,7 +531,7 @@ export default function ScriptToJson() {
               ) : apiKey ? (
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-500">
                   <CheckCircle2 className="h-3 w-3" />
-                  Using {provider === "groq" ? "Groq" : "Inworld"} key from Settings
+                  Using {provider === "groq" ? "Groq" : provider === "deepseek" ? "DeepSeek" : "Inworld"} key from Settings
                 </div>
               ) : (
                 <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-500">

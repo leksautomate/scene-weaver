@@ -361,7 +361,7 @@ export default function ProjectPreview() {
   const handleRegenPrompt = async () => {
     if (!scene) return;
     const settings = loadProviderSettings();
-    if (!settings.groqApiKeys?.some(k => k?.trim()) && !settings.googleCloudApiKey && !settings.inworldApiKey) {
+    if (!settings.groqApiKeys?.some(k => k?.trim()) && !settings.googleCloudApiKey && !settings.inworldApiKey && !settings.arkApiKey) {
       toast.error("No API key configured for prompt generation. Update it in Settings.");
       return;
     }
@@ -377,7 +377,9 @@ export default function ProjectPreview() {
         settings.textProvider,
         visualTheme,
         settings.geminiModel,
-        stylePrompt
+        stylePrompt,
+        settings.arkApiKey,
+        settings.deepseekModel
       );
       setEditPrompt(newPrompt);
       toast.success("New prompt generated");

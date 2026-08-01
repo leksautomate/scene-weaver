@@ -52,12 +52,13 @@ interface JobParams {
   script: string;
   secondsPerScene: number;
   style: "impasto" | "ww2" | "doodle" | "custom";
-  provider: "groq" | "inworld" | "claude" | "gemini";
+  provider: "groq" | "inworld" | "claude" | "gemini" | "deepseek";
   apiKey: string;
   groqApiKeys?: string[];
   claudeModel?: string;
   groqModel?: string;
   geminiModel?: string;
+  deepseekModel?: string;
   stylePrompt?: string;
 }
 
@@ -109,10 +110,28 @@ loadJobsFromDisk();
 // ── Direct API call ───────────────────────────────────────────────────────────
 
 async function callApi(
-  provider: "groq" | "inworld" | "claude" | "gemini",
+  provider: "groq" | "inworld" | "claude" | "gemini" | "deepseek",
   apiKey: string,
   payload: any
 ): Promise<{ status: number; data: any }> {
+  if (provider === "deepseek") {
+    const key = apiKey || process.env.ARK_API_KEY || "";
+    const url = "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions";
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text.substring(0, 1000) };
+    }
+    return { status: r.status, data };
+  }
+
   if (provider === "gemini") {
     try {
       const geminiKey = apiKey || process.env.GEMINI_API_KEY;
@@ -254,13 +273,14 @@ async function callPass1(
   startId: number,
   wordsPerScene: number,
   secondsPerScene: number,
-  provider: "groq" | "inworld" | "claude" | "gemini",
+  provider: "groq" | "inworld" | "claude" | "gemini" | "deepseek",
   apiKey: string,
   claudeModel?: string,
   groqModel?: string,
   rateLimitRetries = 3,
   retryOnParseFailure = true,
-  geminiModel?: string
+  geminiModel?: string,
+  deepseekModel?: string
 ): Promise<SplitScene[]> {
   const systemPrompt = buildPass1SystemPrompt(wordsPerScene, secondsPerScene, startId);
   const userPrompt = `Split this script excerpt into scenes:\n\n${chunk}\n\nReturn ONLY the JSON object.`;
@@ -308,6 +328,16 @@ async function callPass1(
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" }
           ]
         }
+      : provider === "deepseek"
+      ? {
+          model: deepseekModel || "deepseek-v3-2-251201",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.2,
+          max_tokens: 4096,
+        }
       : {
           model: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
           messages: [
@@ -336,10 +366,10 @@ async function callPass1(
       const waitTime = (4 - rateLimitRetries) * baseWait;
       console.log(`[${provider}] Pass1 rate limited or transient error (${result.status}) — waiting ${waitTime / 1000}s (attempts left: ${rateLimitRetries})...`);
       await delay(waitTime);
-      return callPass1(chunk, startId, wordsPerScene, secondsPerScene, provider, apiKey, claudeModel, groqModel, rateLimitRetries - 1, retryOnParseFailure, geminiModel);
+      return callPass1(chunk, startId, wordsPerScene, secondsPerScene, provider, apiKey, claudeModel, groqModel, rateLimitRetries - 1, retryOnParseFailure, geminiModel, deepseekModel);
     }
     if (result.status === 401)
-      throw new Error(`${provider === "groq" ? "Groq" : provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : "Inworld"} API key is invalid.`);
+      throw new Error(`${provider === "groq" ? "Groq" : provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : provider === "deepseek" ? "DeepSeek" : "Inworld"} API key is invalid.`);
     throw new Error(`${provider} Pass 1 error (HTTP ${result.status}): ${errText.substring(0, 200)}`);
   }
 
@@ -379,7 +409,7 @@ async function callPass1(
     }
     if (retryOnParseFailure) {
       console.warn(`[${provider}] Pass1 JSON parse failed — retrying`);
-      return callPass1(chunk, startId, wordsPerScene, secondsPerScene, provider, apiKey, claudeModel, groqModel, rateLimitRetries, false, geminiModel);
+      return callPass1(chunk, startId, wordsPerScene, secondsPerScene, provider, apiKey, claudeModel, groqModel, rateLimitRetries, false, geminiModel, deepseekModel);
     }
     throw new Error(`${provider} returned malformed JSON during scene splitting: ${err.message}`);
   }
@@ -392,7 +422,7 @@ async function callPass2Batch(
   scenes: SplitScene[],
   visualTypes: VisualType[],
   style: "impasto" | "ww2" | "doodle" | "custom",
-  provider: "groq" | "inworld" | "claude" | "gemini",
+  provider: "groq" | "inworld" | "claude" | "gemini" | "deepseek",
   apiKey: string,
   continuityAnchor: string,
   claudeModel?: string,
@@ -400,7 +430,8 @@ async function callPass2Batch(
   rateLimitRetries = 3,
   retryOnParseFailure = true,
   geminiModel?: string,
-  stylePrompt?: string
+  stylePrompt?: string,
+  deepseekModel?: string
 ): Promise<Array<{ id?: number; scene_number?: number; prompt?: string; image_prompt?: string; overlay_text?: any }>> {
   let systemPromptPrompt: string;
   if (style === "custom") {
@@ -461,6 +492,16 @@ async function callPass2Batch(
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" }
           ]
         }
+      : provider === "deepseek"
+      ? {
+          model: deepseekModel || "deepseek-v3-2-251201",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.4,
+          max_tokens: 4096,
+        }
       : {
           model: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
           messages: [
@@ -489,10 +530,10 @@ async function callPass2Batch(
       const waitTime = (4 - rateLimitRetries) * baseWait;
       console.log(`[${provider}] Pass2 rate limited or transient error (${result.status}) — waiting ${waitTime / 1000}s (attempts left: ${rateLimitRetries})...`);
       await delay(waitTime);
-      return callPass2Batch(title, scenes, visualTypes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries - 1, retryOnParseFailure, geminiModel, stylePrompt);
+      return callPass2Batch(title, scenes, visualTypes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries - 1, retryOnParseFailure, geminiModel, stylePrompt, deepseekModel);
     }
     if (result.status === 401)
-      throw new Error(`${provider === "groq" ? "Groq" : provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : "Inworld"} API key is invalid.`);
+      throw new Error(`${provider === "groq" ? "Groq" : provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : provider === "deepseek" ? "DeepSeek" : "Inworld"} API key is invalid.`);
     throw new Error(`${provider} Pass 2 error (HTTP ${result.status}): ${errText.substring(0, 200)}`);
   }
 
@@ -532,7 +573,7 @@ async function callPass2Batch(
     }
     if (retryOnParseFailure) {
       console.warn(`[${provider}] Pass2 JSON parse failed — retrying`);
-      return callPass2Batch(title, scenes, visualTypes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries, false, geminiModel, stylePrompt);
+      return callPass2Batch(title, scenes, visualTypes, style, provider, apiKey, continuityAnchor, claudeModel, groqModel, rateLimitRetries, false, geminiModel, stylePrompt, deepseekModel);
     }
     console.error(`[${provider}] Pass2 JSON parse failed twice — using placeholders. Error: ${err.message}`);
     return scenes.map((s) => ({ id: s.id, prompt: "[generation failed]" }));
@@ -542,7 +583,7 @@ async function callPass2Batch(
 // ── Pipeline runner ───────────────────────────────────────────────────────────
 
 async function runJob(job: Job, params: JobParams): Promise<void> {
-  const { title, script, secondsPerScene, style, provider, apiKey, groqApiKeys: rawGroqKeys, claudeModel, groqModel, geminiModel, stylePrompt } = params;
+  const { title, script, secondsPerScene, style, provider, apiKey, groqApiKeys: rawGroqKeys, claudeModel, groqModel, geminiModel, deepseekModel, stylePrompt } = params;
 
   const groqKeyPool = provider === "groq"
     ? (rawGroqKeys?.filter(k => k?.trim()) ?? (apiKey ? [apiKey] : []))
@@ -565,11 +606,11 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
     }
   }
   const wordsPerScene = Math.floor((WORDS_PER_MINUTE * secondsPerScene) / 60);
-  const batchSize = provider === "groq" 
-    ? GROQ_BATCH_SIZE 
-    : provider === "claude" 
-    ? 5 
-    : provider === "gemini"
+  const batchSize = provider === "groq"
+    ? GROQ_BATCH_SIZE
+    : provider === "claude"
+    ? 5
+    : provider === "gemini" || provider === "deepseek"
     ? 10
     : INWORLD_BATCH_SIZE;
 
@@ -613,13 +654,14 @@ async function runJob(job: Job, params: JobParams): Promise<void> {
         if (provider === "groq") waitMs = delayPass2;
         else if (provider === "claude") waitMs = 12000;
         else if (provider === "gemini") waitMs = 6000;
+        else if (provider === "deepseek") waitMs = 3000;
         else if (provider === "inworld") waitMs = 3000;
         await delay(waitMs);
       }
       const batch = rebalancedScenes.slice(b * batchSize, (b + 1) * batchSize);
       const batchVisualTypes = visualTypes.slice(b * batchSize, (b + 1) * batchSize);
       const anchor = buildContinuityAnchor(completedForAnchor);
-      const results = await withGroqRotation(key => callPass2Batch(title, batch, batchVisualTypes, style, provider, key, anchor, claudeModel, groqModel, 3, true, geminiModel, stylePrompt));
+      const results = await withGroqRotation(key => callPass2Batch(title, batch, batchVisualTypes, style, provider, key, anchor, claudeModel, groqModel, 3, true, geminiModel, stylePrompt, deepseekModel));
 
       for (const r of results) {
         const idVal = r.id ?? r.scene_number ?? (r as any).sceneNumber ?? (r as any).scene_id ?? (r as any).scene_Id;
@@ -677,19 +719,22 @@ router.get("/", (_req: Request, res: Response) => {
 });
 
 router.post("/", (req: Request, res: Response) => {
-  const { title, script, secondsPerScene, style, provider, apiKey, groqApiKeys, claudeModel, groqModel, geminiModel, stylePrompt } = req.body as JobParams;
+  const { title, script, secondsPerScene, style, provider, apiKey, groqApiKeys, claudeModel, groqModel, geminiModel, deepseekModel, stylePrompt } = req.body as JobParams;
 
   if (!title || !script || !provider) {
     return res.status(400).json({ error: "title, script, and provider are required" });
   }
-  if (!["groq", "inworld", "claude", "gemini"].includes(provider)) {
-    return res.status(400).json({ error: "provider must be groq, inworld, claude, or gemini" });
+  if (!["groq", "inworld", "claude", "gemini", "deepseek"].includes(provider)) {
+    return res.status(400).json({ error: "provider must be groq, inworld, claude, gemini, or deepseek" });
   }
   if (!apiKey && !process.env.GROQ_API_KEY && provider === "groq") {
     return res.status(400).json({ error: "No Groq API key. Set one in Settings." });
   }
   if (!apiKey && !process.env.INWORLD_API_KEY && provider === "inworld") {
     return res.status(400).json({ error: "No Inworld API key. Set one in Settings." });
+  }
+  if (!apiKey && !process.env.ARK_API_KEY && provider === "deepseek") {
+    return res.status(400).json({ error: "No BytePlus Ark API key. Set one in Settings." });
   }
   if (provider === "claude") {
     const isVertex = claudeModel?.startsWith("publishers/") || claudeModel?.includes("@") || claudeModel === "claude-haiku-4-5";
@@ -715,6 +760,7 @@ router.post("/", (req: Request, res: Response) => {
       claudeModel,
       groqModel,
       geminiModel,
+      deepseekModel,
       stylePrompt: stylePrompt?.trim(),
     }
   };
@@ -722,7 +768,7 @@ router.post("/", (req: Request, res: Response) => {
   saveJobsToDisk();
 
   // Fire and forget — runs in background
-  runJob(job, { title, script, secondsPerScene: secondsPerScene ?? 15, style: style ?? "impasto", provider, apiKey: apiKey ?? "", groqApiKeys, claudeModel, groqModel, geminiModel, stylePrompt });
+  runJob(job, { title, script, secondsPerScene: secondsPerScene ?? 15, style: style ?? "impasto", provider, apiKey: apiKey ?? "", groqApiKeys, claudeModel, groqModel, geminiModel, deepseekModel, stylePrompt });
 
   res.json({ jobId });
 });

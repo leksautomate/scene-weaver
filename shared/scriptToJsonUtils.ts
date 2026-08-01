@@ -28,15 +28,17 @@ export interface ScriptToJsonParams {
   script: string;
   secondsPerScene: number;
   style: "impasto" | "ww2" | "doodle" | "custom";
-  provider: "groq" | "inworld" | "claude" | "gemini";
+  provider: "groq" | "inworld" | "claude" | "gemini" | "deepseek";
   groqApiKey?: string;
   groqApiKeys?: string[];
   inworldApiKey?: string;
   anthropicApiKey?: string;
   geminiApiKey?: string;
+  arkApiKey?: string;
   groqModel?: string;
   claudeModel?: string;
   geminiModel?: string;
+  deepseekModel?: string;
   stylePrompt?: string;
 }
 

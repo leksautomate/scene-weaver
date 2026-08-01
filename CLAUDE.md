@@ -36,12 +36,13 @@ Historia is a cinematic historical documentary generator: script → AI scene sp
 - Routes: `server/routes/` — `projects.ts`, `assets.ts`, `regenerate.ts`, `gemini-proxy.ts`, `render.ts`, `scriptToJson.ts`, `auth.ts`
 - **All `/api/*` routes require a valid JWT cookie (`historia_token`) except `/api/auth/*`**, enforced by `server/middleware/requireAuth.ts`.
 - `/api/auth` — public auth endpoints (see Auth section below)
-- `/api/gemini-proxy` is a multi-service server-side proxy handling five actions:
-  - `generate` — image generation via the Modal-hosted Z-Image Turbo API (`server/lib/gemini.ts`), authenticated with `MODAL_KEY` / `MODAL_SECRET`
+- `/api/gemini-proxy` is a multi-service server-side proxy handling six actions:
+  - `generate` — image generation via BytePlus Ark Seedream (`server/lib/gemini.ts`), authenticated with `ARK_API_KEY` (or `arkApiKey` from the request)
   - `groq-chat` — Groq API proxy (uses `apiKey` from request or `GROQ_API_KEY` env)
   - `inworld-chat` — Inworld API proxy using `meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` (uses `apiKey` or `INWORLD_API_KEY` env)
   - `claude-chat` — Anthropic API proxy (uses `apiKey` from request or `ANTHROPIC_API_KEY` env)
   - `gemini-chat` — Gemini/Vertex AI proxy (uses `apiKey` from request or `GEMINI_API_KEY` env, falls back to Vertex AI access token)
+  - `deepseek-chat` — DeepSeek via BytePlus Ark proxy (uses `apiKey` from request or `ARK_API_KEY` env), model `deepseek-v3-2-251201`
 - `server/lib/veo.ts` — Veo video animation via Vertex AI (`us-central1` only)
 - `server/routes/regenerate.ts` — `POST /api/regenerate` regenerates a single scene's image or audio server-side (body: `{ projectId, sceneNumber, type: "image"|"audio", voiceOverride? }`)
 - Static directories served: `/uploads` → `uploads/`, `/sfx` → `sfx/`
@@ -89,7 +90,7 @@ The script-to-JSON process runs as a two-pass AI pipeline. It can run **client-s
 - Jobs stored in-memory + persisted to `uploads/script_to_json_jobs.json` (survives restarts; running jobs are marked failed on reload)
 - `GET /api/script-to-json` — list all jobs; `GET /api/script-to-json/:jobId` — poll progress; `DELETE /api/script-to-json/:jobId` — remove from history
 - Pass 1: chunk script → split into scenes with timing. Pass 2: batch scenes → generate image prompts with continuity anchoring.
-- Supported providers: `groq`, `inworld`, `claude`, `gemini`
+- Supported providers: `groq`, `inworld`, `claude`, `gemini`, `deepseek` (via BytePlus Ark)
 
 **Shared logic** in `shared/scriptToJsonUtils.ts`: `chunkScript`, `buildPass1SystemPrompt`, `PASS2_IMPASTO_SYSTEM`, `PASS2_WWII_SYSTEM`, `parseJsonResponse`, `recoverScenesRegex`, `recoverPromptsRegex`, `buildContinuityAnchor`, `getGroqModelConfig`.
 
@@ -97,7 +98,7 @@ The script-to-JSON process runs as a two-pass AI pipeline. It can run **client-s
 
 ### Asset generation modes
 
-Images are **always generated client-side** via `/api/gemini-proxy` (Modal-hosted Z-Image Turbo API). The server pipeline (`runAssetPipeline`) only handles TTS audio when `INWORLD_API_KEY` is set and the project's `ttsProvider` is `inworld`.
+Images are **always generated client-side** via `/api/gemini-proxy` (BytePlus Ark Seedream). The server pipeline (`runAssetPipeline`) only handles TTS audio when `INWORLD_API_KEY` is set and the project's `ttsProvider` is `inworld`.
 
 When `INWORLD_API_KEY` is present and `ttsProvider === "inworld"`, `POST /api/projects/:id/scenes` triggers `runAssetPipeline()` server-side for audio and returns `{ serverPipeline: true }`. The frontend polls instead of generating audio locally.
 
@@ -107,7 +108,7 @@ The `stats.serverPipeline` boolean in the `projects` table is the flag the front
 1. User submits script + optional style images → `POST /api/projects` creates project record
 2. Script split into scenes client-side (Groq API, batched 30 scenes/request)
 3. Scenes inserted via `POST /api/projects/:id/scenes` — triggers server audio pipeline if configured
-4. Images: Modal-hosted Z-Image Turbo API via `/api/gemini-proxy` — client batches scenes in groups of `settings.imageConcurrency` (default 20, Settings → Providers) and generates each batch's images concurrently; server-side semaphore in `server/lib/gemini.ts` (`IMAGE_CONCURRENCY` env var, default 20) caps total concurrent calls across all pipelines. Benchmarked against the live Modal endpoint: 100% success up to 51 concurrent, degrading to ~58% success (timeouts) at 200 concurrent — keep this well under 100 if raising it further.
+4. Images: BytePlus Ark Seedream via `/api/gemini-proxy` — client batches scenes in groups of `settings.imageConcurrency` (default 20, Settings → Providers) and generates each batch's images concurrently; server-side semaphore in `server/lib/gemini.ts` (`IMAGE_CONCURRENCY` env var, default 20) caps total concurrent calls across all pipelines. Each generation call tries a fallback chain of three Seedream models in order — `dola-seedream-5-0-pro-260628` → `seedream-5-0-260128` → `seedream-4-5-251128` — falling through to the next model on any failure (auth errors fail fast instead of burning through the chain).
 5. Audio: Inworld TTS API; sequential (100 RPS, retries up to 3× with backoff)
 6. Video export (JsonToVideo page and render routes):
    - Phase 1: `POST /api/render/:id/clips` — one MP4 per scene with Ken Burns effect
@@ -126,9 +127,9 @@ The `stats.serverPipeline` boolean in the `projects` table is the flag the front
 ## Key Conventions
 
 - **AI providers** (Groq key, Inworld key, Anthropic key, Gemini key) are stored in `localStorage` and set via the Settings page. The Groq key is **never** in `.env`; it can be passed as `apiKey` in the `groq-chat` proxy request.
-- **Text provider** (`textProvider` in `ProviderSettings`): `"groq"` (default, batch 10), `"claude"` (batch 5), `"inworld"` (batch 15), or `"gemini"` (batch 10). Determines which LLM generates scene image prompts.
+- **Text provider** (`textProvider` in `ProviderSettings`): `"groq"` (default, batch 10), `"claude"` (batch 5), `"inworld"` (batch 15), `"gemini"` (batch 10), or `"deepseek"` (batch 10, via BytePlus Ark). Determines which LLM generates scene image prompts.
 - **Visual theme** (`visualTheme` in `ProviderSettings`): `"impasto"` (default — digital oil painting, heavy impasto style) or `"ww2"` (WWII archival photorealism, B&W film grain). Switches both the system prompt and image style suffix (`COMPACT_STYLE_SUFFIX` / `COMPACT_WWII_STYLE_SUFFIX` in `providers.ts`).
-- **Image generation** uses a single model — Modal-hosted Z-Image Turbo (`server/lib/gemini.ts`). The endpoint URL and `Modal-Key`/`Modal-Secret` auth headers are configurable per-browser in Settings → Providers → Image Generation (stored in `localStorage` like other provider keys, sent through `/api/gemini-proxy` and override the server's `MODAL_ZIMAGE_URL`/`MODAL_KEY`/`MODAL_SECRET` env vars when set). Aspect ratio (`16:9`, `1:1`, `9:16`) remains selectable.
+- **Image generation** uses BytePlus Ark Seedream (`server/lib/gemini.ts`), trying three models in order on failure: `dola-seedream-5-0-pro-260628` → `seedream-5-0-260128` → `seedream-4-5-251128`. Requests use `size` (exact `WxH` pixels — Ark has no aspect-ratio string param), `watermark: false`, and `response_format: "b64_json"`. Size is picked per model, not globally: `dola-seedream-5-0-pro` accepts ~1K sizes (`1280x720`/`720x1280`/`1024x1024`), but `seedream-5-0`/`seedream-4-5` both reject anything under 3,686,400px, so the two fallback models use `2560x1440`/`1440x2560`/`1920x1920` instead (live-verified against the Ark API — see `sizeForModel()`). The `arkApiKey` field in `ProviderSettings` (Settings → Providers → Image Generation) is sent through `/api/gemini-proxy` as `Bearer` auth and overrides the server's `ARK_API_KEY` env var when set — it's shared with the `deepseek` text provider. Aspect ratio (`16:9`, `1:1`, `9:16`) remains selectable.
 - `skipImageGeneration` setting (in `ProviderSettings`) bypasses Imagen calls entirely — useful for testing audio/script flows without consuming quota.
 - **shadcn/ui** components live in `src/components/ui/`. Fonts: Cinzel (headings), Source Sans 3 (body).
 - Scene status fields (`image_status`, `audio_status`): `pending` | `completed` | `failed`
@@ -150,10 +151,8 @@ RENDER_API_URL=http://5.189.146.143:9000   # External FFmpeg render API
 RENDER_API_KEY=alliswell
 SERVER_URL=http://5.189.146.143:3001       # Public URL of this server (used by render API to fetch assets)
 INWORLD_API_KEY=<key>                      # Can also be set via Settings page
-# Modal (Z-Image Turbo image generation)
-MODAL_ZIMAGE_URL=https://leksautomate--z-image-turbo-api.modal.run   # optional override
-MODAL_KEY=<modal-key>
-MODAL_SECRET=<modal-secret>
+# BytePlus Ark (Seedream image generation + DeepSeek text) — can also be set via Settings page as arkApiKey
+ARK_API_KEY=<ark-key>
 # Vertex AI (for Veo + Claude/Gemini text proxy) — requires gcloud CLI authenticated
 VERTEX_PROJECT_ID=<gcp-project-id>
 VERTEX_LOCATION_ID=europe-west4            # Gemini text region (default: europe-west4)

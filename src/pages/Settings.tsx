@@ -50,8 +50,7 @@ export default function Settings() {
   const [showGroq, setShowGroq] = useState(false);
   const [showGoogleCloud, setShowGoogleCloud] = useState(false);
   const [showInworld, setShowInworld] = useState(false);
-  const [showModalKey, setShowModalKey] = useState(false);
-  const [showModalSecret, setShowModalSecret] = useState(false);
+  const [showArkKey, setShowArkKey] = useState(false);
 
   const [groqStatus, setGroqStatus] = useState<HealthStatus>("idle");
   const [groqMsg, setGroqMsg] = useState("");
@@ -61,8 +60,8 @@ export default function Settings() {
   const [inworldMsg, setInworldMsg] = useState("");
   const [renderStatus, setRenderStatus] = useState<HealthStatus>("idle");
   const [renderMsg, setRenderMsg] = useState("");
-  const [modalStatus, setModalStatus] = useState<HealthStatus>("idle");
-  const [modalMsg, setModalMsg] = useState("");
+  const [arkStatus, setArkStatus] = useState<HealthStatus>("idle");
+  const [arkMsg, setArkMsg] = useState("");
 
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [storageLoading, setStorageLoading] = useState(false);
@@ -148,12 +147,12 @@ export default function Settings() {
     }
   };
 
-  const testModal = async () => {
-    if (!settings.modalKey || !settings.modalSecret) {
-      setModalStatus("error"); setModalMsg("Modal Key and Secret required");
+  const testArk = async () => {
+    if (!settings.arkApiKey) {
+      setArkStatus("error"); setArkMsg("Ark API Key required");
       return;
     }
-    setModalStatus("checking"); setModalMsg("");
+    setArkStatus("checking"); setArkMsg("");
     try {
       const res = await fetch("/api/gemini-proxy", {
         method: "POST",
@@ -163,19 +162,17 @@ export default function Settings() {
           payload: {
             userInput: { candidatesCount: 1, prompts: ["a small red circle on a white background"] },
             aspectRatio: "1:1",
-            modalUrl: settings.modalImageUrl,
-            modalKey: settings.modalKey,
-            modalSecret: settings.modalSecret,
+            arkApiKey: settings.arkApiKey,
           },
         }),
       });
       const data = await res.json();
-      if (data?.status === 401 || data?.status === 403) { setModalStatus("error"); setModalMsg("Invalid Modal Key/Secret"); return; }
-      if (!res.ok || data?.status >= 400 || data?.data?.error) { setModalStatus("error"); setModalMsg(data?.data?.error || `HTTP ${data?.status ?? res.status}`); return; }
-      if (!data?.data?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage) { setModalStatus("error"); setModalMsg("No image returned"); return; }
-      setModalStatus("ok");
+      if (data?.status === 401 || data?.status === 403) { setArkStatus("error"); setArkMsg("Invalid Ark API Key"); return; }
+      if (!res.ok || data?.status >= 400 || data?.data?.error) { setArkStatus("error"); setArkMsg(data?.data?.error || `HTTP ${data?.status ?? res.status}`); return; }
+      if (!data?.data?.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage) { setArkStatus("error"); setArkMsg("No image returned"); return; }
+      setArkStatus("ok");
     } catch (e: any) {
-      setModalStatus("error"); setModalMsg(e.message?.includes("fetch") ? "Network error" : e.message);
+      setArkStatus("error"); setArkMsg(e.message?.includes("fetch") ? "Network error" : e.message);
     }
   };
 
@@ -191,7 +188,7 @@ export default function Settings() {
     }
   };
 
-  const testAll = () => { testGroq(); testGoogleCloud(); testInworld(); testRenderApi(); testModal(); };
+  const testAll = () => { testGroq(); testGoogleCloud(); testInworld(); testRenderApi(); testArk(); };
 
   const fetchStorage = async () => {
     setStorageLoading(true);
@@ -496,7 +493,7 @@ export default function Settings() {
                 <label className="text-sm font-medium text-foreground">AI Text Provider</label>
                 <Select
                   value={settings.textProvider || "groq"}
-                  onValueChange={(v) => setSettings(s => ({ ...s, textProvider: v as "groq" | "claude" | "inworld" | "gemini" }))}
+                  onValueChange={(v) => setSettings(s => ({ ...s, textProvider: v as "groq" | "claude" | "inworld" | "gemini" | "deepseek" }))}
                 >
                   <SelectTrigger className="bg-secondary">
                     <SelectValue />
@@ -506,10 +503,25 @@ export default function Settings() {
                     <SelectItem value="claude">Claude (Anthropic)</SelectItem>
                     <SelectItem value="inworld">Llama 4 Maverick (Inworld - 128k context)</SelectItem>
                     <SelectItem value="gemini">Gemini 3.5 Flash (Google)</SelectItem>
+                    <SelectItem value="deepseek">DeepSeek (BytePlus Ark)</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">Select the AI provider used for scene manifest creation and prompt generation.</p>
               </div>
+
+              {settings.textProvider === "deepseek" && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">DeepSeek Model</label>
+                  <Input
+                    type="text"
+                    placeholder="deepseek-v3-2-251201"
+                    value={settings.deepseekModel || ""}
+                    onChange={(e) => setSettings(s => ({ ...s, deepseekModel: e.target.value }))}
+                    className="bg-secondary"
+                  />
+                  <p className="text-xs text-muted-foreground">Uses the BytePlus Ark API Key configured in Image Generation below.</p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -528,62 +540,36 @@ export default function Settings() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="gemini">Z-Image Turbo</SelectItem>
+                    <SelectItem value="gemini">Seedream (BytePlus Ark)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-foreground">Model Endpoint URL</label>
+                  <label className="text-sm font-medium text-foreground">BytePlus Ark API Key</label>
                   <div className="flex items-center gap-2">
-                    <StatusIndicator status={modalStatus} message={modalMsg} />
-                    <Button variant="ghost" size="sm" onClick={testModal} className="text-xs h-7">
-                      {modalStatus === "checking" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
+                    <StatusIndicator status={arkStatus} message={arkMsg} />
+                    <Button variant="ghost" size="sm" onClick={testArk} className="text-xs h-7">
+                      {arkStatus === "checking" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
                     </Button>
                   </div>
                 </div>
-                <Input
-                  type="text"
-                  placeholder="https://your-app--z-image-turbo-api.modal.run"
-                  value={settings.modalImageUrl || ""}
-                  onChange={(e) => { setSettings(s => ({ ...s, modalImageUrl: e.target.value })); setModalStatus("idle"); }}
-                  className="bg-secondary"
-                />
-                <p className="text-xs text-muted-foreground">Modal-hosted image model endpoint. Change this to point at a different deployed model.</p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Modal Key</label>
                 <div className="flex gap-2">
                   <Input
-                    type={showModalKey ? "text" : "password"}
-                    placeholder="wk-..."
-                    value={settings.modalKey || ""}
-                    onChange={(e) => { setSettings(s => ({ ...s, modalKey: e.target.value })); setModalStatus("idle"); }}
+                    type={showArkKey ? "text" : "password"}
+                    placeholder="ark-..."
+                    value={settings.arkApiKey || ""}
+                    onChange={(e) => { setSettings(s => ({ ...s, arkApiKey: e.target.value })); setArkStatus("idle"); }}
                     className="bg-secondary flex-1"
                   />
-                  <Button variant="ghost" size="icon" onClick={() => setShowModalKey(!showModalKey)}>
-                    {showModalKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  <Button variant="ghost" size="icon" onClick={() => setShowArkKey(!showArkKey)}>
+                    {showArkKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Modal Secret</label>
-                <div className="flex gap-2">
-                  <Input
-                    type={showModalSecret ? "text" : "password"}
-                    placeholder="ws-..."
-                    value={settings.modalSecret || ""}
-                    onChange={(e) => { setSettings(s => ({ ...s, modalSecret: e.target.value })); setModalStatus("idle"); }}
-                    className="bg-secondary flex-1"
-                  />
-                  <Button variant="ghost" size="icon" onClick={() => setShowModalSecret(!showModalSecret)}>
-                    {showModalSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">Modal-Key / Modal-Secret auth headers for the endpoint above. Leave blank to use the server's MODAL_KEY / MODAL_SECRET env vars.</p>
+                <p className="text-xs text-muted-foreground">
+                  Used for Seedream image generation (tries dola-seedream-5-0-pro, seedream-5-0, then seedream-4-5 in order) and the DeepSeek text provider. Leave blank to use the server's ARK_API_KEY env var.
+                </p>
               </div>
 
               <div className="space-y-2">

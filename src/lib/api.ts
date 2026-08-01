@@ -104,9 +104,11 @@ async function processRemainingChunks(
   googleCloudApiKey?: string,
   claudeModel?: string,
   inworldApiKey?: string,
-  textProvider?: "groq" | "claude" | "inworld" | "gemini",
+  textProvider?: "groq" | "claude" | "inworld" | "gemini" | "deepseek",
   visualTheme?: "impasto" | "ww2",
-  geminiModel?: string
+  geminiModel?: string,
+  arkApiKey?: string,
+  deepseekModel?: string
 ): Promise<void> {
   let nextSceneNumber = startSceneNumber;
   for (let i = chunkStartIdx; i < totalChunks; i++) {
@@ -127,7 +129,9 @@ async function processRemainingChunks(
         inworldApiKey,
         textProvider,
         visualTheme,
-        geminiModel
+        geminiModel,
+        arkApiKey,
+        deepseekModel
       );
       await appendScenesToProject(projectId, chunkScenes);
       nextSceneNumber += chunkScenes.length;
@@ -153,7 +157,7 @@ export async function createProjectFrontend(
   const chunks = splitScriptIntoChunks(script, chunkLimit);
   const totalChunks = chunks.length;
 
-  const aiProvider = useProvider === "inworld" ? "Inworld" : (useProvider === "claude" ? "Claude" : (useProvider === "gemini" ? "Gemini" : "Groq"));
+  const aiProvider = useProvider === "inworld" ? "Inworld" : (useProvider === "claude" ? "Claude" : (useProvider === "gemini" ? "Gemini" : (useProvider === "deepseek" ? "DeepSeek" : "Groq")));
   callbacks.onPhase(totalChunks > 1
     ? `Generating scenes via ${aiProvider} (chunk 1 of ${totalChunks})...`
     : `Generating scene manifest via ${aiProvider}...`
@@ -175,7 +179,9 @@ export async function createProjectFrontend(
       settings.inworldApiKey || undefined,
       settings.textProvider,
       options.visualTheme,
-      settings.geminiModel || undefined
+      settings.geminiModel || undefined,
+      settings.arkApiKey || undefined,
+      settings.deepseekModel || undefined
     );
   } catch (e: any) {
     throw new Error(`Scene generation failed: ${e.message}`);
@@ -231,7 +237,9 @@ export async function createProjectFrontend(
       settings.inworldApiKey || undefined,
       settings.textProvider,
       options.visualTheme,
-      settings.geminiModel || undefined
+      settings.geminiModel || undefined,
+      settings.arkApiKey || undefined,
+      settings.deepseekModel || undefined
     ).catch(e => console.error("[progressive] background processing error:", e.message));
   }
 
@@ -273,7 +281,7 @@ export async function runClientSidePipeline(
           let lastError = "All Imagen prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateGeminiImage(prompt, projectAspectRatio, { url: settings.modalImageUrl, key: settings.modalKey, secret: settings.modalSecret });
+              imageBlob = await generateGeminiImage(prompt, projectAspectRatio, settings.arkApiKey);
               success = true;
               break;
             } catch (e: any) {
@@ -427,7 +435,7 @@ export async function regenerateAssetFrontend(
         let lastError = "";
         for (const prompt of allPrompts) {
           try {
-            imageBlob = await generateGeminiImage(prompt, regenAspectRatio, { url: settings.modalImageUrl, key: settings.modalKey, secret: settings.modalSecret });
+            imageBlob = await generateGeminiImage(prompt, regenAspectRatio, settings.arkApiKey);
             success = true;
             break;
           } catch (e: any) {
@@ -852,7 +860,7 @@ export async function resumeProject(projectId: string, callbacks: PipelineCallba
           let lastError = "All Imagen prompts failed";
           for (const prompt of allPrompts) {
             try {
-              imageBlob = await generateGeminiImage(prompt, resumeAspectRatio, { url: settings.modalImageUrl, key: settings.modalKey, secret: settings.modalSecret });
+              imageBlob = await generateGeminiImage(prompt, resumeAspectRatio, settings.arkApiKey);
               success = true;
               break;
             } catch (e: any) {

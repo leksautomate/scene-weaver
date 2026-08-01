@@ -14,9 +14,7 @@ router.post("/", async (req: Request, res: Response) => {
 
       try {
         const imageBase64 = await generateGeminiImage(promptText, payload?.aspectRatio, {
-          url: payload?.modalUrl,
-          key: payload?.modalKey,
-          secret: payload?.modalSecret,
+          apiKey: payload?.arkApiKey || apiKey,
         });
         return res.json({
           status: 200,
@@ -32,6 +30,20 @@ router.post("/", async (req: Request, res: Response) => {
       const key = apiKey || process.env.GROQ_API_KEY;
       if (!key) return res.json({ status: 500, data: { error: "GROQ_API_KEY not configured" } });
       const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify(payload),
+      });
+      const text = await r.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text.substring(0, 1000) }; }
+      return res.json({ status: r.status, data });
+    }
+
+    if (action === "deepseek-chat") {
+      const key = apiKey || process.env.ARK_API_KEY;
+      if (!key) return res.json({ status: 500, data: { error: "ARK_API_KEY not configured" } });
+      const r = await fetch("https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
         body: JSON.stringify(payload),

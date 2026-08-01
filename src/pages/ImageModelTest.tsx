@@ -27,11 +27,7 @@ export default function ImageModelTest() {
     const t0 = Date.now();
     try {
       const settings = loadProviderSettings();
-      const blob = await generateGeminiImage(prompt, aspectRatio, {
-        url: settings.modalImageUrl,
-        key: settings.modalKey,
-        secret: settings.modalSecret,
-      });
+      const blob = await generateGeminiImage(prompt, aspectRatio, settings.arkApiKey);
       setImageUrl(URL.createObjectURL(blob));
       setStatus("done");
       setDurationMs(Date.now() - t0);
@@ -53,7 +49,7 @@ export default function ImageModelTest() {
     if (!imageUrl) return;
     const a = document.createElement("a");
     a.href = imageUrl;
-    a.download = `z-image-turbo-${aspectRatio.replace(":", "x")}.png`;
+    a.download = `seedream-${aspectRatio.replace(":", "x")}.png`;
     a.click();
   }
 
@@ -111,7 +107,7 @@ export default function ImageModelTest() {
       <Card className="overflow-hidden">
         <CardHeader className="pb-2 pt-4 px-4">
           <div className="flex items-center justify-between gap-2">
-            <CardTitle className="text-sm font-medium">Z-Image Turbo</CardTitle>
+            <CardTitle className="text-sm font-medium">Seedream (BytePlus Ark)</CardTitle>
             <StatusBadge status={status} />
           </div>
           {durationMs !== undefined && status !== "generating" && (
