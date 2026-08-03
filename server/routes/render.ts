@@ -254,8 +254,7 @@ function escapeFFmpegPath(filePath: string): string {
 function escapeDrawtextText(s: string): string {
   return s
     .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
-    .replace(/"/g, '\\"')
+    .replace(/'/g, "'\\''")
     .replace(/:/g, "\\:")
     .replace(/%/g, "%%")
     .replace(/\n/g, "\\n");
