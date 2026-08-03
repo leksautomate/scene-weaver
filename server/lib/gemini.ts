@@ -1,4 +1,5 @@
 import { execSync } from "child_process";
+import fs from "fs";
 import path from "path";
 
 export const PROJECT_ID = process.env.VERTEX_PROJECT_ID || "project-f3847793-8610-4a16-945";
@@ -11,11 +12,79 @@ const ARK_API_KEY = process.env.ARK_API_KEY;
 // Live-tested against the Ark API: dola-seedream-5-0-pro accepts ~1K sizes, but
 // seedream-5-0/4-5 both reject anything under 3,686,400px ("size must be at least
 // 3686400 pixels") — so each model gets its own minimum-viable size per aspect ratio.
-const ARK_IMAGE_MODELS = [
+export const ARK_IMAGE_MODELS = [
   "dola-seedream-5-0-pro-260628",
   "seedream-5-0-260128",
   "seedream-4-5-251128",
 ];
+
+export const DAILY_LIMIT_PER_MODEL = Number(process.env.ARK_IMAGE_DAILY_LIMIT) || 100;
+const USAGE_FILE = path.join("uploads", "ark_usage.json");
+
+interface ArkUsageData {
+  date: string;
+  counts: Record<string, number>;
+}
+
+function getTodayString(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function loadArkUsage(): ArkUsageData {
+  const today = getTodayString();
+  try {
+    if (fs.existsSync(USAGE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+      if (data && data.date === today && typeof data.counts === "object") {
+        return data;
+      }
+    }
+  } catch (e) {
+    console.warn("[ark-usage] Failed to read usage file, starting fresh today:", e);
+  }
+  return { date: today, counts: {} };
+}
+
+function saveArkUsage(data: ArkUsageData): void {
+  try {
+    const dir = path.dirname(USAGE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(USAGE_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (e) {
+    console.warn("[ark-usage] Failed to write usage file:", e);
+  }
+}
+
+export function getArkDailyUsage() {
+  const usage = loadArkUsage();
+  const modelsStatus: Record<string, { used: number; limit: number; remaining: number }> = {};
+  for (const m of ARK_IMAGE_MODELS) {
+    const used = usage.counts[m] || 0;
+    modelsStatus[m] = {
+      used,
+      limit: DAILY_LIMIT_PER_MODEL,
+      remaining: Math.max(0, DAILY_LIMIT_PER_MODEL - used),
+    };
+  }
+  return {
+    date: usage.date,
+    limitPerModel: DAILY_LIMIT_PER_MODEL,
+    models: modelsStatus,
+  };
+}
+
+function isModelQuotaAvailable(model: string): boolean {
+  const usage = loadArkUsage();
+  const currentCount = usage.counts[model] || 0;
+  return currentCount < DAILY_LIMIT_PER_MODEL;
+}
+
+function recordSuccessfulGeneration(model: string): void {
+  const usage = loadArkUsage();
+  usage.counts[model] = (usage.counts[model] || 0) + 1;
+  saveArkUsage(usage);
+  console.log(`[ark-usage] Model ${model} count updated to ${usage.counts[model]}/${DAILY_LIMIT_PER_MODEL}`);
+}
 
 type AspectRatio = "16:9" | "9:16" | "1:1";
 const VALID_ASPECT_RATIOS: AspectRatio[] = ["16:9", "9:16", "1:1"];
@@ -93,6 +162,14 @@ async function _generateWithArk(prompt: string, aspectRatio: string, overrides?:
   const errors: string[] = [];
 
   for (const model of ARK_IMAGE_MODELS) {
+    if (!isModelQuotaAvailable(model)) {
+      const usage = loadArkUsage();
+      const count = usage.counts[model] || 0;
+      console.warn(`[ark-seedream] ${model} daily limit (${count}/${DAILY_LIMIT_PER_MODEL}) reached today — skipping to next model`);
+      errors.push(`${model}: daily limit reached (${count}/${DAILY_LIMIT_PER_MODEL})`);
+      continue;
+    }
+
     try {
       const res = await fetch(ARK_IMAGE_URL, {
         method: "POST",
@@ -128,6 +205,8 @@ async function _generateWithArk(prompt: string, aspectRatio: string, overrides?:
         console.warn(`[ark-seedream] ${model} returned no image data — trying next model`);
         continue;
       }
+
+      recordSuccessfulGeneration(model);
       return b64;
     } catch (e: any) {
       if (e.message?.includes("auth failed")) throw e;
@@ -136,7 +215,7 @@ async function _generateWithArk(prompt: string, aspectRatio: string, overrides?:
     }
   }
 
-  throw new Error(`All BytePlus Ark image models failed: ${errors.join(" | ")}`);
+  throw new Error(`All BytePlus Ark image models failed or reached daily limit (${DAILY_LIMIT_PER_MODEL}/model/day): ${errors.join(" | ")}`);
 }
 
 export function getStyleImagePaths(projectId: string): string[] {

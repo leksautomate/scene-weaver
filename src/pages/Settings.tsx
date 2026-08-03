@@ -568,7 +568,7 @@ export default function Settings() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Used for Seedream image generation (tries dola-seedream-5-0-pro, seedream-5-0, then seedream-4-5 in order) and the DeepSeek text provider. Leave blank to use the server's ARK_API_KEY env var.
+                  Used for Seedream image generation (tries dola-seedream-5-0-pro, seedream-5-0, then seedream-4-5 in order) and the DeepSeek text provider. Capped at <strong>100 images per model per day</strong>. Leave blank to use the server's ARK_API_KEY env var.
                 </p>
               </div>
 

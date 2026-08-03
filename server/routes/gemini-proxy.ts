@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { generateGeminiImage, PROJECT_ID, getAccessToken } from "../lib/gemini.js";
+import { generateGeminiImage, getArkDailyUsage, PROJECT_ID, getAccessToken } from "../lib/gemini.js";
 import { GoogleGenAI } from "@google/genai";
 
 const router = Router();
@@ -7,6 +7,10 @@ const router = Router();
 router.post("/", async (req: Request, res: Response) => {
   try {
     const { action, payload, apiKey } = req.body;
+
+    if (action === "ark-usage") {
+      return res.json({ status: 200, data: getArkDailyUsage() });
+    }
 
     if (action === "generate") {
       const promptText: string = payload?.userInput?.prompts?.[0] || payload?.prompt || "";

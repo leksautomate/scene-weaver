@@ -957,6 +957,24 @@ function base64ToBlob(encodedImage: string): Blob {
   return new Blob([bytes], { type: "image/png" });
 }
 
+export interface ArkUsageInfo {
+  date: string;
+  limitPerModel: number;
+  models: Record<string, { used: number; limit: number; remaining: number }>;
+}
+
+export async function fetchArkDailyUsage(): Promise<ArkUsageInfo | null> {
+  try {
+    const res = await apiProxy({ action: "ark-usage" });
+    if (res.status === 200 && res.data) {
+      return res.data as ArkUsageInfo;
+    }
+  } catch (e) {
+    console.warn("Failed to fetch Ark usage:", e);
+  }
+  return null;
+}
+
 // ========================
 // Inworld — TTS audio
 // ========================
